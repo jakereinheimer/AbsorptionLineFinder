@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spectral Analysis Result</title>
+</head>
+<body>
+    <h1>Spectral Analysis Result</h1>
+    
+    <!-- Embed the Plotly HTML using an iframe -->
+    <iframe src="{{ url_for('static', filename='FluxPlot.html') }}" width="100%" height="600px" frameborder="0"></iframe>
+
+<!-- Dropdown to select the doublet and update the velocity plot -->
+<h2>Select Doublet to View Velocity Plot</h2>
+<form action="{{ url_for('show_results') }}" method="POST">
+    <label for="doublet">Select Doublet:</label>
+    <select id="doublet" name="doublet">
+        {% for element in elements %}
+        <option value="{{ element }}" {% if selected_doublet == element %} selected {% endif %}>
+            {{ element }}
+        </option>
+        {% endfor %}
+    </select>
+    <button type="submit">Update Velocity Plot</button>
+</form>
+
+<!-- Display the selected velocity plot -->
+<h2>Velocity Plot</h2>
+<img src="{{ plot_url }}" alt="Velocity Plot" width="100%" />
+
+<!-- Link to go back and select another spectrum -->
+<p><a href="/">Go Back to Select Another Spectrum</a></p>
+</body>
+</html>

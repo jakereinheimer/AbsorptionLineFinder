@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spectral Analysis</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 40px;
+        }
+
+        .container {
+            width: 50%;
+            margin: auto;
+            text-align: center;
+        }
+
+        h1 {
+            color: #333;
+        }
+
+        select {
+            padding: 10px;
+            font-size: 16px;
+            width: 100%;
+            margin-bottom: 20px;
+        }
+
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            background-color: #007BFF;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        img {
+            margin-top: 30px;
+            max-width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Spectra Analysis</h1>
+        <form action="/" method="GET">
+            <label for="catalog">Select Catalog:</label>
+            <select name="catalog" id="catalog" onchange="this.form.submit()">
+                {% for catalog in catalogs %}
+                <option value="{{ catalog }}" {% if selected_catalog == catalog %}selected{% endif %}>{{ catalog }}</option>
+                {% endfor %}
+            </select>
+        </form>
+        <form action="/analyze" method="POST">
+            <label for="spectrum">Select Spectrum:</label>
+            <select name="spectrum" id="spectrum">
+                {% for spectrum in spectra %}
+                <option value="{{ spectrum }}">{{ spectrum }}</option>
+                {% endfor %}
+            </select>
+            <br>
+            <button type="submit">Analyze</button>
+        </form>
+        {% if plot_url %}
+        <img src="{{ plot_url }}" alt="Spectral Plot">
+        {% endif %}
+    </div>
+</body>
+</html>
+
