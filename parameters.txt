@@ -1,0 +1,6 @@
+FWHM = 7.5
+#km/s
+
+resolution = 3.5
+#km/s
+

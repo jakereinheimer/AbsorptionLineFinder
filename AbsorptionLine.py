@@ -4,11 +4,19 @@ import matplotlib.pyplot as plt
 from astropy.io import fits
 from matplotlib.widgets import Slider
 import os
-from scipy.optimize import curve_fit
-from scipy.special import voigt_profile
 from scipy.signal import find_peaks
-import emcee
-import corner
+from scipy.integrate import simpson
+import pickle
+
+
+# Constants
+c = 2.9979e10  # Speed of light in cm/s
+c_kms = 2.9979e5  # Speed of light in km/s
+
+#helper functions
+def save_object(obj, filename):
+    with open(filename, 'wb') as outp:  # Open the file in binary write mode
+        pickle.dump(obj, outp, pickle.HIGHEST_PROTOCOL)  # Pickle the object and write to file
 
 class AbsorptionLine:
     def __init__(self, wavelength, flux, errors):
@@ -74,8 +82,6 @@ class AbsorptionLine:
     
     def equivalent_width(self):
 
-        from scipy.integrate import simpson
-
         ew = simpson(1 - self.flux, x=self.wavelength) 
 
         return ew
@@ -126,138 +132,31 @@ class AbsorptionLine:
         plt.savefig("test_plot/"+name+".png")
         plt.clf()
 
-    def voigt_sum(self, x, *params):
-        """
-        Returns the sum of multiple Voigt profiles.
-        `params` should contain multiple sets of (center, amplitude, sigma, gamma).
-        """
-        assert len(params) % 4 == 0
-        n_profiles = len(params) // 4
-        result = np.zeros_like(x)
-        for i in range(n_profiles):
-            center, amplitude, sigma, gamma = params[4*i:4*i+4]
-            result += amplitude * voigt_profile(x - center, sigma, gamma)
-        return result
-
-    def linfit(self,name):
-        from scipy.signal import find_peaks
-        # Detect peaks
-        peaks, properties = find_peaks(self.flux, height=0.1)  # Adjust height threshold appropriately
-
-        # Initial guesses for Voigt profile parameters for each peak
-        initial_params = []
-        for peak in peaks:
-            amplitude = properties["peak_heights"][0]
-            initial_params.extend([self.wavelength[peak], amplitude, 1.0, 1.0])  # center, amplitude, sigma, gamma
-
-        # Fit the Voigt profiles to the data using curve_fit
-        popt, pcov = curve_fit(self.voigt_sum, self.wavelength, self.flux, p0=initial_params,maxfev = 114000)
-
-        # Calculate the Voigt profiles with the optimized parameters
-        fitted_profiles = self.voigt_sum(self.wavelength, *popt)
-
-        # Compute residuals (original flux minus the fitted Voigt profiles)
-        residuals = self.flux - fitted_profiles
-
-        # Fit a line to the residuals using np.linalg.lstsq
-        A = np.vstack([self.wavelength, np.ones(len(self.wavelength))]).T
-        m, c = np.linalg.lstsq(A, residuals, rcond=None)[0]
-
-        # Optionally plot the results
-        import matplotlib.pyplot as plt
-        plt.figure(figsize=(10, 6))
-        plt.plot(self.wavelength, self.flux, label='Original Data')
-        plt.plot(self.wavelength, fitted_profiles, label='Fitted Voigt Profiles')
-        plt.plot(self.wavelength, m * self.wavelength + c, label='Linear Fit to Residuals')
-        plt.legend()
-        plt.xlabel('Wavelength')
-        plt.ylabel('Flux')
-        plt.title('Voigt Profile and Linear Fit')
-        plt.savefig(name+'.png')
-
-        # Return linear fit parameters and Voigt fit parameters
-        return {'slope': m, 'intercept': c, 'voigt_params': popt}
-
-
-
-
-    def perform_mcmc_analysis(self):
-        # Define the log likelihood function
-        def log_likelihood(theta, x, y, yerr):
-            # Reshape theta to fit multiple Voigt profiles
-            params = theta.reshape(-1, 4)
-            model = np.sum([1 - (p[1] * voigt_profile(x - p[0], p[2], p[3])) for p in params], axis=0)
-            sigma2 = yerr ** 2
-            return -0.5 * np.sum((y - model) ** 2 / sigma2 + np.log(sigma2))
+    def export(self, name):
+        # Split the name to separate the directory path and the file name
+        directory, filename = os.path.split(name)
         
-        def log_prior(theta):
-            # Apply constraints on each parameter set
-            params = theta.reshape(-1, 4)
-            for p in params:
-                center, amplitude, sigma, gamma = p
-                if not (0 < sigma < 1 and 0 < gamma < 1 and 0 < amplitude < 1 and self.wavelength[0] < center < self.wavelength[-1]):
-                    return -np.inf
-            return 0.0
+        # Create the directory if it does not exist
+        if directory and not os.path.exists(directory):
+            os.makedirs(directory)
         
-        def log_probability(theta, x, y, yerr):
-            lp = log_prior(theta)
-            if not np.isfinite(lp):
-                return -np.inf
-            return lp + log_likelihood(theta, x, y, yerr)
-
-        # Initialize and run MCMC
-
-        self.peaks, _ = find_peaks(-self.flux+1,height=.1)
+        # Create a DataFrame using a dictionary to ensure correct alignment of columns
+        df = pd.DataFrame({
+            'Flux': self.flux,
+            'Wavelength': self.wavelength,
+            'Error': self.errors
+        })
         
-        # Initialize MCMC parameters
-        initial = []
-        for peak in self.peaks:
-            initial.append([self.wavelength[peak], max(self.flux), 1.0, 1.0])  # Initial guesses per peak
+        # Save the DataFrame to a CSV file
+        df.to_csv(f"{name}.csv", index=False)
 
-        nwalkers, ndim = 100, len(initial) * 4
-        #nwalkers = max(100, 4 * ndim)
-        pos = np.array(initial).flatten() + 0.01 * np.random.randn(nwalkers, ndim)
-        sampler = emcee.EnsembleSampler(nwalkers, ndim, log_probability, args=(self.wavelength, self.flux, self.errors))
-        sampler.run_mcmc(pos, 5000)
+    def save(self,name):
 
-        # Process MCMC results
-        samples = sampler.get_chain(discard=100, thin=15, flat=True)
-        self.fit_results = {
-            'mean': np.mean(samples, axis=0),
-            'median': np.median(samples, axis=0),
-            'hpdi': np.percentile(samples, [2.5, 97.5], axis=0)
-        }
-        print(self.fit_results)
-        return self.fit_results
-    
-
-    def plot_fit(self,name):
-        # Extract parameters from the results
-        best_fit_params = self.fit_results['mean']  # or 'median' or 'map', depending on your preference
-        print(best_fit_params)
-
-        modeled_flux = np.ones_like(self.wavelength)
-
-        for i in range(len(self.peaks)):
-            center=best_fit_params[4*i]
-            amp=best_fit_params[4*i+1]
-            sig=best_fit_params[4*i+2]
-            gamma=best_fit_params[4*i+3]
-
-            modeled_flux -= (amp * voigt_profile(self.wavelength - center, sig, gamma))
+        # Split the name to separate the directory path and the file name
+        directory, filename = os.path.split(name)
         
-        # Generate the model Voigt profile using the best-fit parameters
-        
-        # Plot the observed data
-        plt.figure(figsize=(10, 6))
-        plt.step(self.wavelength, self.flux, 'k-', label='Observed Flux')
-        plt.errorbar(self.wavelength, self.flux, yerr=self.errors, fmt='.', color='gray', alpha=0.5, label='Error')
+        # Create the directory if it does not exist
+        if directory and not os.path.exists(directory):
+            os.makedirs(directory)
 
-        # Plot the fitted model
-        plt.plot(self.wavelength, modeled_flux, 'r--', label='Fitted Voigt Profile')
-        
-        plt.title('Voigt Profile Fit to Spectral Data')
-        plt.xlabel('Wavelength')
-        plt.ylabel('Flux')
-        plt.legend()
-        plt.savefig(f"{name}.png")
+        save_object(self,name)

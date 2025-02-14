@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCMC Analysis Result</title>
+</head>
+<body>
+    <h1>MCMC Analysis Results</h1>
+
+    <p>Fit Results:</p>
+    <img src="{{ plot_url }}" alt="Velocity Plot" width="100%" />
+
+    <p>Trace Plot:</p>
+    <img src="{{ trace_plot_url }}" alt="Velocity Plot" width="100%" />
+
+    <p>Corner Plot:</p>
+    <img src="{{ corner_plot_url }}" alt="Velocity Plot" width="100%" />
+
+    <!-- Download button -->
+    <a href="{{ url_for('download_file', filename='chain.npy') }}" download>
+        <button>Download the Chain</button>
+    </a>
+
+    <pre>{{ results }}</pre>
+    <a href="{{ url_for('show_results') }}">Back to Results</a>
+</body>
+</html>

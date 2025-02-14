@@ -9,7 +9,7 @@
     <h1>Spectral Analysis Result</h1>
     
     <!-- Embed the Plotly HTML using an iframe -->
-    <iframe src="{{ url_for('static', filename='FluxPlot.html') }}" width="100%" height="600px" frameborder="0"></iframe>
+    <iframe src="{{ url_for('static', filename='Data/FluxPlot.html') }}" width="100%" height="600px" frameborder="0"></iframe>
 
 <!-- Dropdown to select the doublet and update the velocity plot -->
 <h2>Select Doublet to View Velocity Plot</h2>
@@ -29,7 +29,29 @@
 <h2>Velocity Plot</h2>
 <img src="{{ plot_url }}" alt="Velocity Plot" width="100%" />
 
+<!-- Single Form for MCMC Analysis and Steps Input -->
+<form action="{{ url_for('mcmc_for_lines') }}" method="post">
+    <!-- Buttons for individual MCMC Analysis -->
+    <div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 10px;">
+        {% for index in button_indices %}
+        <button type="submit" name="line_index" value="{{ index }}">MCMC Analysis {{ index + 1 }}</button>
+        {% endfor %}
+    </div>
+
+    <div style="text-align: center; margin-top: 20px;">
+        <label for="mcmc_steps">Enter MCMC Steps:</label>
+        <input type="number" id="mcmc_steps" name="mcmc_steps" min="300" max="100000" value="1000" required>
+    </div>
+
+    <div style="text-align: center; margin-top: 20px;">
+        <label for="mcmc_walkers">Enter MCMC Walkers:</label>
+        <input type="number" id="mcmc_walkers" name="mcmc_walkers" min="5" max="10000" value="250" required>
+    </div>
+
+</form>
+
 <!-- Link to go back and select another spectrum -->
 <p><a href="/">Go Back to Select Another Spectrum</a></p>
+
 </body>
 </html>

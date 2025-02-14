@@ -2,36 +2,53 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
-from astropy.io import fits
-import os
 import plotly.graph_objs as go
 import plotly.io as pio
 import math
-from scipy.special import voigt_profile
+from scipy.ndimage import gaussian_filter
+from scipy.interpolate import interp1d
+from scipy.signal import convolve
+from scipy.ndimage import gaussian_filter1d
+
 
 matplotlib.use('Agg')
 
 #my functions
-from essential_functions import get_data,read_atomDB,clear_directory,double_gaussian,record_pair_csv
+from essential_functions import get_data,get_custom_data,read_atomDB,clear_directory,record_pair_csv,nmf
 from AbsorptionLine import AbsorptionLine
 
 
 
 class VPFit:
     
-    def __init__(self,data_loc,catalog,name):
+    def __init__(self,data_loc,catalog,name,custom=False):
         
         self.catalog=catalog
         self.object_name=name
-        print(self.catalog)
-        
-        self.flux,self.error,self.wavelength,self.found_redshift=get_data(data_loc,catalog,name)
+        print(f"Catalog : {self.catalog}")
+
+        if catalog=='custom':
+            self.flux,self.error,self.wavelength,self.found_redshift=get_custom_data(data_loc)
+            self.p=4
+            self.N=3
+
+            if self.object_name=='nmf':
+
+                self.wavelength,self.flux,self.error = nmf(self.wavelength,self.flux,self.error)
+
+        else:
+            self.flux,self.error,self.wavelength,self.found_redshift=get_data(data_loc,catalog,name)
+
         if catalog=="Kodiaq":
             self.p=2
             self.N=4
+        elif catalog == "TNG":
+            self.p=4
+            self.N=3
         elif catalog=="test":
-            self.p=2
-            self.N=4
+            self.p=4
+            self.N=3
+
         elif catalog=="SDSS7":
             self.p=8
             self.N=2
@@ -40,9 +57,6 @@ class VPFit:
             self.fiber=int(self.object_name.split("-")[1])
             #self.fiber = f"{int(self.fiber):04d}"
 
-            print(self.plate)
-            print(self.fiber)
-
             redshifts=pd.read_csv('/Users/jakereinheimer/Desktop/Fakhri/redshifts.csv')
             #print(redshifts.head())
 
@@ -50,14 +64,9 @@ class VPFit:
             # Use boolean indexing to find rows
             result_df = redshifts[(redshifts['PLATE'] == self.plate) & (redshifts['FIBER'] == self.fiber)]
 
-            print(result_df.head())
-
             # Extract 'ZABS' values as a list
             self.zhu_abs = result_df['ZABS'].tolist()
             self.zhu_abs_err = result_df['ERR_ZABS'].tolist()
-
-            print(self.zhu_abs)
-            print(self.zhu_abs_err)
 
 
         #correct sky lines
@@ -119,7 +128,7 @@ class VPFit:
 
 
 
-    def PlotFlux(self):
+    def PlotFlux(self,iteration=0):
         
                 # Create the plot with Plotly
         trace_flux = go.Scatter(
@@ -155,39 +164,6 @@ class VPFit:
                     shapes.append(dict(type='line', x0=line*(1+(zabs+self.zhu_abs_err[i])), y0=min(self.flux), x1=line*(1+(zabs+self.zhu_abs_err[i])), y1=3, line=dict(color='cyan', dash='dash')))
                     shapes.append(dict(type='line', x0=line*(1+(zabs-self.zhu_abs_err[i])), y0=min(self.flux), x1=line*(1+(zabs-self.zhu_abs_err[i])), y1=3, line=dict(color='cyan', dash='dash')))
                     
-
-        '''
-        if self.catalog=="SDSS7":
-
-            from tensorflow.keras.models import Sequential
-            from tensorflow.keras.layers import Conv1D, MaxPooling1D, Flatten, Dense, BatchNormalization
-            from tensorflow.keras.optimizers import Adam
-            from sklearn.model_selection import train_test_split
-
-            from tensorflow.keras.models import load_model
-            from tensorflow.keras.metrics import MeanSquaredError
-
-            # Load the model
-            model = load_model('/Users/jakereinheimer/Desktop/Fakhri/NN_detection/CNN_absorption.h5', custom_objects={'mse': MeanSquaredError()})
-
-            max_length=4466
-
-            from tensorflow.keras.preprocessing.sequence import pad_sequences
-
-            wavelength_padded = pad_sequences([self.wavelength], maxlen=max_length, dtype='float32', padding='post')
-            flux_padded = pad_sequences([self.flux], maxlen=max_length, dtype='float32', padding='post')
-            error_padded = pad_sequences([self.error], maxlen=max_length, dtype='float32', padding='post')
-
-            X_new = np.stack([flux_padded, error_padded, wavelength_padded], axis=-1).squeeze()
-
-            prediction = model.predict(np.array([X_new]))  # np.array([X_new]) to add batch dimension
-            print("Predicted ZABS:", prediction.flatten()[0])
-
-            lines=[2796.355099,2803.5322972,2600.1720322]
-            for j,line in enumerate(lines):
-                    print(line*(1+prediction))
-                    shapes.append(dict(type='line', x0=line*(1+prediction), y0=min(self.flux), x1=line*(1+prediction), y1=3, line=dict(color='purple', dash='dash')))
-            '''
 
 
 
@@ -231,7 +207,10 @@ class VPFit:
         fig = go.Figure(data=[trace_flux, trace_error], layout=layout)
         
         # Save the interactive plot as an HTML file
-        pio.write_html(fig, file='static/FluxPlot.html', auto_open=False)
+        if self.catalog=="TNG":
+            pio.write_html(fig, file=f'static/Trident/FluxPlot_{iteration}.html', auto_open=False)
+        else:
+            pio.write_html(fig, file='static/Data/FluxPlot.html', auto_open=False)
 
 
 
@@ -639,7 +618,7 @@ class VPFit:
                     error = self.calculate_peak_error(suspected_loc, spectral_resolution)
                     found_line = self.Nearest(suspected_loc, tol=5*error, whole=True)
                     if isinstance(found_line, AbsorptionLine):
-                        found_line.suspected_line_loc=loc
+                        #found_line.suspected_line_loc=loc
                         found_doublets.append(found_line)
 
                 N_values = [line.find_N(z, strg, dblt) for line, strg, dblt in zip(found_doublets, strength, doublet)]
@@ -650,7 +629,7 @@ class VPFit:
                 for j, line in enumerate(found_doublets):
                     #TODO consider changing tolerance
                     if math.isclose(line.N, mean, abs_tol=3*std):
-                        line.suspected_line_loc=doublet[j]
+                        #line.suspected_line_loc=doublet[j]
                         N_check.append(line)
 
                 current_dict[element] = tuple(N_check)
@@ -668,9 +647,9 @@ class VPFit:
         plt.clf()
 
 
-    def vel_plots(self):
+    def vel_plots(self,iterations=0):
 
-        clear_directory('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/velocity_plots/')
+        clear_directory('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/Data/velocity_plots/')
 
         c = 3e5  # Speed of light in km/s
         velocity_window = 200  # km/s, adjust as necessary
@@ -699,12 +678,8 @@ class VPFit:
                     full_flux = self.flux[idx_start:idx_stop]
                     full_error = self.error[idx_start:idx_stop]
 
-                    #line.perform_mcmc_analysis()
-                    #modeled_flux = 1 - line.amplitude * voigt_profile(full_velocity * c / center_wavelength + center_wavelength - line.fit_center, line.sigma, line.gamma)
-
                     ax.step(full_velocity, full_flux, where='mid', label=f"Spectrum of {line.peak:.2f} Å", color="blue")
                     ax.step(full_velocity, full_error, where='mid', label="Error", color="purple", linestyle='--')
-                    #ax.plot(full_velocity, modeled_flux, 'r--', label='Fitted Voigt Profile')  # Plot the fitted model
                     ax.axvline(0, color='red', linestyle='--', label="Center at 0 km/s")
 
                     #ew = line.actual_equivalent_width(z)
@@ -724,7 +699,11 @@ class VPFit:
 
             plt.suptitle(f"Velocity Profiles for {element}", fontsize=14)
             plt.tight_layout(rect=[0, 0.03, 1, 0.97])  # Adjust layout to make room for title
-            plt.savefig(f"static/velocity_plots/velocityPlot_{element}.png")
+
+            if self.catalog == "TNG":
+                plt.savefig(f"static/Trident/velocity_plots/velocityPlot_{element}_{iterations}.png")
+            else:
+                plt.savefig(f"static/Data/velocity_plots/velocityPlot_{element}.png")
             plt.clf()
 
             print(f"Done with {element}")
@@ -745,16 +724,17 @@ class VPFit:
 
         self.PlotFlux()
 
-        for z in self.zs.keys():
+        j=0
+        for outer_key, inner_dict in self.zs.items():
+            
+            for inner_key, tup in inner_dict.items():
+                i=0
+                for line in tup:
 
-            for i,line in enumerate(self.zs.get(z).get("MgII")):
+                    name=f"found_lines/{inner_key}/line_{j},{i}"
 
-                pass
+                    line.save(name)
 
-                #line.linfit(f"z_{z},{i}")
+                    i+=1
 
-                
-                #line.perform_mcmc_analysis()
-                #name=f"z_{z},{i}"
-                #line.plot_fit(name)
-        
+            j+=1

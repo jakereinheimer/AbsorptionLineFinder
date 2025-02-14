@@ -8,12 +8,7 @@ from scipy.ndimage import median_filter
 from sklearn.decomposition import NMF
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
-
-def rebin(wave,old_vel,new_vel):
-    from scipy.interpolate import interp1d
-
-    new_wavelength_increment = (wave[-1] - wave[0]) * (new_vel / old_vel) / len(wave)
-    new_wavelength_grid = np.arange(wave[0], wave[-1], new_wavelength_increment)
+import scipy.ndimage
 
 
 def get_data(folder,catalog,name):
@@ -133,35 +128,97 @@ def get_data(folder,catalog,name):
 
         found_redshift=2.1 #idk
 
-        #smoothing
-        sigma = .5  # Adjust sigma based on your data and requirements
-        smoothed_flux = gaussian_filter(flux_data, sigma=sigma)
-        smoothed_errors = gaussian_filter(error_data, sigma=sigma)  # Smooth relative errors
 
-        from scipy.interpolate import interp1d
-        # Current velocity per pixel (given)
-        v_pix = 4
-        # Desired new velocity per pixel
-        v_new = 60  # Change this to your desired velocity per pixel
 
-        # Calculate new wavelength grid
-        current_wavelength_grid = np.linspace(wavelength_data[0], wavelength_data[-1], len(wavelength_data))
-        new_wavelength_increment = (wavelength_data[-1] - wavelength_data[0]) * (v_new / v_pix) / len(wavelength_data)
-        new_wavelength_grid = np.arange(wavelength_data[0], wavelength_data[-1], new_wavelength_increment)
+    elif catalog == "TNG":
+    
+        data = pd.read_csv(folder, delimiter=" ", header=1, names=['wavelength', 'tau', 'flux', 'error'])
 
-        # Interpolate the old data to the new wavelength grid
-        flux_interpolator = interp1d(current_wavelength_grid, smoothed_flux, kind='linear', fill_value="extrapolate")
-        error_interpolator = interp1d(current_wavelength_grid, smoothed_errors, kind='linear', fill_value="extrapolate")
+        wavelength=data['wavelength'].to_numpy()
+        flux=data['flux'].to_numpy()
+        error=data['error'].to_numpy()
 
-        # New binned data
-        flux_data = flux_interpolator(new_wavelength_grid)
-        error_data = error_interpolator(new_wavelength_grid)
-        wavelength_data=new_wavelength_grid
+        flux_smoothed= median_filter(flux, size=40)
+
+        flux_reshaped = flux_smoothed.reshape(1, -1)  # Reshape for NMF
+
+        # Adjust NMF initialization and regularization
+        nmf = NMF(n_components=1, random_state=0)
+
+        # Fit NMF to the scaled flux data
+        W = nmf.fit_transform(flux_reshaped)
+        H = nmf.components_
+
+        # Reconstruct the continuum from the components
+        reconstructed_continuum = np.dot(W, H).flatten()
+
+        flux_data=flux/reconstructed_continuum
+        error_data=error/reconstructed_continuum
+        wavelength_data=wavelength
+
+        found_redshift=2
+
 
     else:
         return (None,None,None,None)
 
     return (flux_data,error_data,wavelength_data,found_redshift)
+
+
+def get_custom_data(loc):
+    
+    df=pd.read_csv(loc)
+
+    try:
+        wavelength=df['Wavelength'].to_numpy()
+    except:
+        wavelength=df['wavelength'].to_numpy()
+    try:
+        flux=df['Flux'].to_numpy()
+    except:
+        flux=df['flux'].to_numpy()
+    try:
+        error=df['Error'].to_numpy()
+    except:
+        error=df['error'].to_numpy()
+
+    found_redshift=2
+
+    return (flux,error,wavelength,found_redshift)
+
+def nmf(inp_wavelength,inp_flux,inp_error):
+
+    wavelength=inp_wavelength
+    flux=inp_flux
+    error=inp_error
+    
+    #Masking
+    mask = flux>0
+
+    flux=flux[mask]
+    wavelength=wavelength[mask]
+    error=error[mask]
+    
+    #median filter to smooth data        
+    flux_smoothed= median_filter(flux, size=40)
+
+    flux_reshaped = flux_smoothed.reshape(1, -1)  # Reshape for NMF
+
+    # Adjust NMF initialization and regularization
+    nmf = NMF(n_components=1, random_state=0)
+
+    # Fit NMF to the scaled flux data
+    W = nmf.fit_transform(flux_reshaped)
+    H = nmf.components_
+
+    # Reconstruct the continuum from the components
+    reconstructed_continuum = np.dot(W, H).flatten()
+
+    flux_data=flux/reconstructed_continuum
+    error_data=error/reconstructed_continuum
+
+    return wavelength,flux_data,error_data
+
 
 
 
@@ -172,6 +229,33 @@ def read_atomDB():
         AtomDB = pd.read_csv(atom_loc, sep=',', engine='python', header=None, names=['Transition', 'Wavelength', 'Strength', 'Tau'])
 
         return AtomDB
+
+def read_parameter(parameter_name):
+    filename='parameters.txt'
+    try:
+        with open(filename, 'r') as file:
+            for line in file:
+                # Check if the line contains the parameter name
+                if parameter_name in line:
+                    # Assume the format is 'name = value'
+                    parts = line.split('=')
+                    if len(parts) == 2:
+                        # Return the value, stripping any whitespace and converting to float if possible
+                        value = parts[1].strip()
+                        try:
+                            return float(value)
+                        except ValueError:
+                            return value
+    except FileNotFoundError:
+        print(f"Error: The file '{filename}' does not exist.")
+        return None
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return None
+
+    print(f"Parameter '{parameter_name}' not found in the file.")
+    return None
+
 
 
 def clear_directory(folder_path):

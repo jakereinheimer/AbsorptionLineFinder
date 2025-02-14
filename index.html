@@ -71,6 +71,30 @@
         <img src="{{ plot_url }}" alt="Spectral Plot">
         {% endif %}
     </div>
+
+    <div class="container">
+        <h1>or Upload Your Own Data</h1>
+        <form action="/upload_data" method="POST" enctype="multipart/form-data">
+            <input type="file" name="data_file" required>
+            <br><br>
+            <!-- Add a checkbox for NMF -->
+            <label>
+                <input type="checkbox" name="nmf" value="false"> NMF?
+            </label>
+            <br><br>
+            <button type="submit">Upload and Analyze</button>
+        </form>
+    </div>
+    
+    
+
+    <form action="/trident" method="POST" class="container">
+        <p>-----------------------</p>
+        <label for="ID">Or enter TNG Subhalo ID:</label>
+        <input type="ID" name="ID" id="ID" required>
+        <br>
+        <button type="submit">Submit</button>
+    </form>
 </body>
 </html>
 
