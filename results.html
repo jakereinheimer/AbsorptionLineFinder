@@ -3,55 +3,247 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-store" />
     <title>Spectral Analysis Result</title>
+    {% if update_flag %}
+    <meta http-equiv="refresh" content="0">
+    {% endif %}
+    <style>
+        /* Collapsible Section Style */
+        .collapsible {
+            background-color: #007bff;
+            color: white;
+            cursor: pointer;
+            padding: 10px 15px;
+            width: 100%;
+            text-align: left;
+            border: none;
+            outline: none;
+            font-size: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .content {
+            padding: 10px 15px;
+            display: none;
+            overflow: hidden;
+            background-color: #f1f1f1;
+        }
+
+        /* Arrow icon for the collapsible */
+        .arrow {
+            font-size: 18px;
+            transition: transform 0.3s ease;
+        }
+
+        .rotate {
+            transform: rotate(90deg);
+        }
+    </style>
 </head>
 <body>
-    <h1>Spectral Analysis Result</h1>
-    
-    <!-- Embed the Plotly HTML using an iframe -->
+
+<h1>Spectral Analysis Result</h1>
+
+<!-- Flux Plot Section -->
+<div id=""fluxPlot>
+    <h2>Flux Plot</h2>
     <iframe src="{{ url_for('static', filename='Data/FluxPlot.html') }}" width="100%" height="600px" frameborder="0"></iframe>
+</div>
 
-<!-- Dropdown to select the doublet and update the velocity plot -->
-<h2>Select Doublet to View Velocity Plot</h2>
-<form action="{{ url_for('show_results') }}" method="POST">
-    <label for="doublet">Select Doublet:</label>
-    <select id="doublet" name="doublet">
-        {% for element in elements %}
-        <option value="{{ element }}" {% if selected_doublet == element %} selected {% endif %}>
-            {{ element }}
-        </option>
-        {% endfor %}
-    </select>
-    <button type="submit">Update Velocity Plot</button>
-</form>
+<!-- Doublet Selection Section -->
+<button class="collapsible">
+    <span>Algorithm Found Absorbers</span>
+    <span class="arrow">▶</span>
+</button>
+<div class="content">
 
-<!-- Display the selected velocity plot -->
-<h2>Velocity Plot</h2>
-<img src="{{ plot_url }}" alt="Velocity Plot" width="100%" />
+<h2>Detected Absorbers</h2>
+{% if absorbers %}
+    {% for absorber in absorbers %}
+        <button class="collapsible">
+            <span>Absorber at z = {{ absorber.z|round(4) }}</span>
+            <span class="arrow">▶</span>
+        </button>
+        <div class="content">
+            <p><strong>Redshift (z):</strong> {{ absorber.z|round(4) }} ± {{ absorber.z_err|round(4) }}</p>
 
-<!-- Single Form for MCMC Analysis and Steps Input -->
-<form action="{{ url_for('mcmc_for_lines') }}" method="post">
-    <!-- Buttons for individual MCMC Analysis -->
-    <div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 10px;">
-        {% for index in button_indices %}
-        <button type="submit" name="line_index" value="{{ index }}">MCMC Analysis {{ index + 1 }}</button>
-        {% endfor %}
-    </div>
+            <div id="plot_{{ loop.index0 }}">
+                <img src="" alt="Velocity Plot" width="80%" id="img_plot_{{ loop.index0 }}">
+            </div>
+            
 
-    <div style="text-align: center; margin-top: 20px;">
-        <label for="mcmc_steps">Enter MCMC Steps:</label>
-        <input type="number" id="mcmc_steps" name="mcmc_steps" min="300" max="100000" value="1000" required>
-    </div>
+            <!-- Element Selection Form -->
+            <form onsubmit="updatePlot(event, {{ loop.index0 }})">
+                <label for="element_{{ loop.index0 }}">Select Element:</label>
+                <select id="element_{{ loop.index0 }}" name="element">
+                    {% for element in absorber.list_found_elements() %}
+                        <option value="{{ element }}" {% if element == 'MgII' %} selected {% endif %}>
+                            {{ element }}
+                        </option>
+                    {% endfor %}
+                </select>
+                <button type="submit">Update Plot</button>
+            </form>
 
-    <div style="text-align: center; margin-top: 20px;">
-        <label for="mcmc_walkers">Enter MCMC Walkers:</label>
-        <input type="number" id="mcmc_walkers" name="mcmc_walkers" min="5" max="10000" value="250" required>
-    </div>
+            <!-- MCMC for the selected element and absorber -->
+            <form action="{{ url_for('mcmc_for_lines') }}" method="post">
+                <input type="hidden" name="absorber_z" value="{{ absorber.z }}">
+                <input type="hidden" name="absorber_index" value="{{ loop.index0 }}">
 
-</form>
+                <label for="mcmc_element_{{ loop.index0 }}">Select Element for MCMC:</label>
+                <select id="mcmc_element_{{ loop.index0 }}" name="mcmc_element">
+                    {% for element in absorber.list_found_elements() %}
+                        <option value="{{ element }}" {% if element == 'MgII' %} selected {% endif %}>
+                            {{ element }}
+                        </option>
+                    {% endfor %}
+                </select>
 
-<!-- Link to go back and select another spectrum -->
-<p><a href="/">Go Back to Select Another Spectrum</a></p>
+                <label for="mcmc_steps_{{ loop.index0 }}">MCMC Steps:</label>
+                <input type="number" id="mcmc_steps_{{ loop.index0 }}" name="mcmc_steps" value="1000" min="100" max="100000" required>
+
+                <label for="mcmc_walkers_{{ loop.index0 }}">MCMC Walkers:</label>
+                <input type="number" id="mcmc_walkers_{{ loop.index0 }}" name="mcmc_walkers" value="250" min="10" max="1000" required>
+
+                <button type="submit">Run MCMC</button>
+            </form>
+
+            <!-- Multi-Element MCMC Form with Checkboxes -->
+            <form action="{{ url_for('multi_mcmc') }}" method="post">
+                <input type="hidden" name="absorber_index" value="{{ loop.index0 }}">
+
+                <label>Select Elements for Multi MCMC:</label>
+                <div style="display: flex; flex-wrap: wrap;">
+                    {% for element in absorber.list_found_elements() %}
+                        <label style="margin-right: 10px;">
+                            <input type="checkbox" name="multi_mcmc_elements" value="{{ element }}">
+                            {{ element }}
+                        </label>
+                    {% endfor %}
+                </div>
+
+                <label for="multi_mcmc_steps_{{ loop.index0 }}">MCMC Steps:</label>
+                <input type="number" id="multi_mcmc_steps_{{ loop.index0 }}" name="multi_mcmc_steps" value="1000" min="100" max="100000" required>
+
+                <label for="multi_mcmc_walkers_{{ loop.index0 }}">MCMC Walkers:</label>
+                <input type="number" id="multi_mcmc_walkers_{{ loop.index0 }}" name="multi_mcmc_walkers" value="250" min="10" max="1000" required>
+
+                <button type="submit">Run Multi MCMC</button>
+            </form>
+
+
+
+        </div>
+    {% endfor %}
+{% else %}
+    <p>No absorbers found.</p>
+{% endif %}
+
+
+<!-- JavaScript for Plot Update -->
+<script>
+function updatePlot(event, absorberIndex) {
+    event.preventDefault();
+
+    const element = document.getElementById(`element_${absorberIndex}`).value;
+
+    fetch(`/update_plot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ absorber_index: absorberIndex, element: element })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.plot_base64) {
+            document.getElementById(`img_plot_${absorberIndex}`).src = `data:image/png;base64,${data.plot_base64}`;
+        } else {
+            alert("Failed to update plot.");
+        }
+    })
+    .catch(error => console.error('Error updating plot:', error));
+}
+</script>
+    
+
+</div>
+
+<!-- Doublet Selection Section -->
+<button class="collapsible">
+    <span>Hand find absorptions</span>
+    <span class="arrow">▶</span>
+</button>
+
+<div class="content">
+
+    <button onclick="startHandSelect()">Select Absorption Line</button>
+
+    {% if custom_absorptions %}
+        <h2>Manually Selected Absorptions</h2>
+        <ul>
+            {% for key, absorption in custom_absorptions.items() %}
+                <li>
+                    <strong>{{ key }}</strong><br>
+                    <img src="data:image/png;base64,{{ absorption.plot_base64 }}" width="30%">
+                </li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <p>No custom absorptions yet.</p>
+    {% endif %}
+
+    <!-- Multi-Element MCMC  -->
+    <form action="{{ url_for('custom_multi_mcmc') }}" method="post">
+
+        <label>Select Elements for Multi MCMC:</label>
+
+        <label for="custom_multi_mcmc_steps">MCMC Steps:</label>
+        <input type="number" id="custom_multi_mcmc_steps" name="custom_multi_mcmc_steps" value="1000" min="100" max="100000" required>
+
+        <label for="custom_multi_mcmc_walkers">MCMC Walkers:</label>
+        <input type="number" id="custom_multi_mcmc_walkers" name="custom_multi_mcmc_walkers" value="250" min="10" max="1000" required>
+
+        <button type="submit">Run MCMC</button>
+    </form>
+</div>
+
+<script>
+function startHandSelect() {
+    fetch('/hand_select_absorption', {
+        method: 'POST'
+    })
+    .then(response => response.json())
+    .then(data => {
+        alert(data.message);
+    })
+    .catch(error => console.error('Error:', error));
+}
+</script>
+
+
+<!-- JavaScript for Collapsible Behavior -->
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const collapsibles = document.querySelectorAll(".collapsible");
+
+    collapsibles.forEach(button => {
+        button.addEventListener("click", function() {
+            const content = this.nextElementSibling;
+            const arrow = this.querySelector(".arrow");
+
+            if (content.style.display === "block") {
+                content.style.display = "none";
+                arrow.classList.remove("rotate");
+            } else {
+                content.style.display = "block";
+                arrow.classList.add("rotate");
+            }
+        });
+    });
+});
+</script>
 
 </body>
 </html>
