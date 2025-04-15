@@ -5,9 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Cache-Control" content="no-store" />
     <title>Spectral Analysis Result</title>
-    {% if update_flag %}
-    <meta http-equiv="refresh" content="0">
-    {% endif %}
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     <style>
         /* Collapsible Section Style */
         .collapsible {
@@ -40,6 +38,22 @@
 
         .rotate {
             transform: rotate(90deg);
+        }
+    </style>
+
+    <style>
+        #plot {
+            width: 90%; /* Adjust width to stretch out the plot */
+            margin: auto; /* Center the plot horizontally */
+            height: 500px; /* Adjust height as needed */
+        }
+        button#submitRange {
+            display: block;
+            width: 200px;
+            margin: 20px auto; /* Center button and add space above */
+            padding: 10px;
+            font-size: 16px;
+            cursor: pointer;
         }
     </style>
 </head>
@@ -208,6 +222,119 @@ function updatePlot(event, absorberIndex) {
         <button type="submit">Run MCMC</button>
     </form>
 </div>
+
+<!-- Doublet Selection Section -->
+<button onclick='' class="collapsible">
+    <span>Smart Find MgII</span>
+    <span class="arrow">▶</span>
+</button>
+
+<!-- Place this inside the specific collapsible section for the plot -->
+<div id="plot" class="content"></div>
+<button id="submitRange">Submit Selected Range</button>
+
+
+<script>
+    var selectedRange = {xmin: null, xmax: null};  // Holds the selected range
+
+    fetch('/data')
+    .then(response => response.json())
+    .then(data => {
+        console.log("Received data:", data);
+
+        var traces = [
+        {
+            x: data.wavelength,
+            y: data.flux,
+            mode: 'lines',
+            name: 'Flux',
+            type: 'line',
+            line: {
+            color : 'black',
+            //shape : 'hv',  
+            width : 1 }  
+            },
+        {
+            x: data.wavelength, 
+            y: data.error,
+            mode: 'lines',
+            name: 'Error',
+            type: 'line',
+            line: {
+            color: 'blue',
+            //shape: 'hv',  
+            width: 1 }  
+        }
+        ];
+
+        var layout = {
+        title: 'Select Range',
+        xaxis: {title: 'Wavelength'},
+        yaxis: {title: 'Flux'},
+        dragmode: 'select',  // default to select mode
+        updatemenus: [{
+            x: 0.0,
+            y: 1.2,
+            yanchor: 'top',
+            xanchor: 'left',
+            showactive: false,
+            buttons: [{
+                method: 'relayout',
+                args: ['dragmode', 'select'],
+                label: 'Select Mode'
+            }, {
+                method: 'relayout',
+                args: ['dragmode', 'pan'],
+                label: 'Pan Mode'
+            }]
+        }]
+    };
+
+    var config = {
+        responsive: true,
+        displaylogo: false,
+        modeBarButtonsToRemove: ['toggleSpikelines', 'hoverClosestCartesian', 'hoverCompareCartesian']
+    };
+
+    Plotly.newPlot('plot', traces, layout, config)
+    .then(function() {
+    var plotDiv = document.getElementById('plot');
+    plotDiv.on('plotly_selected', function(eventData) {
+        if (eventData) {
+            selectedRange.xmin = eventData.range.x[0];
+            selectedRange.xmax = eventData.range.x[1];
+            console.log(selectedRange.xmin, selectedRange.xmax);  // Logging the selected range
+            }
+        });
+    });
+
+    });
+
+    document.getElementById('submitRange').addEventListener('click', function() {
+        if (selectedRange.xmin && selectedRange.xmax) {
+            fetch('/save_selection', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(selectedRange)
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log(data.success)
+                if (data.success) {
+                    window.location.href = '/show_custom_results';  // Redirect on success
+                } else {
+                    alert('Failed to save selection. Please try again.');
+                }
+            })
+            .catch(error => console.error('Error:', error));
+        } else {
+            alert('Please make a selection on the plot.');
+        }
+    });
+</script>
+
 
 <script>
 function startHandSelect() {
