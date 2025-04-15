@@ -230,7 +230,7 @@ class MicroAbsorptionLine:
                 self.saturation_direction='left'
             elif right>left:
                 self.saturation_direction='right'
-                
+
         else:
             self.is_saturated=False
     
@@ -309,10 +309,15 @@ class AbsorptionLineSystem:
 
         self.vpfit=vpfit
 
-        self.microLines=lines
+        if isinstance(lines,list):
+            self.microLines=lines
 
-        self.start_ind=self.microLines[0].global_start_ind
-        self.end_ind=self.microLines[-1].global_end_ind
+            self.start_ind=self.microLines[0].global_start_ind
+            self.end_ind=self.microLines[-1].global_end_ind
+
+        elif isinstance(lines,tuple):
+            self.start_ind=lines[0]
+            self.end_ind=lines[1]
 
         self.wavelength=vpfit.wavelength[self.start_ind:self.end_ind]
         self.flux = vpfit.flux[self.start_ind:self.end_ind]
@@ -362,6 +367,13 @@ class AbsorptionLineSystem:
         self.possible_lines=[]
 
         self.mcmc_microlines=[]
+
+    def update_line_attributes(self):
+
+        row=AtomDB[AtomDB['Wavelength'] == self.suspected_line]
+
+        self.f=float(row['Strength'])
+        self.gamma=float(row['Tau'])
 
     def MgII_dimensions(self,z_low,z_high,MgII=False):
 
