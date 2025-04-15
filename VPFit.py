@@ -5,10 +5,7 @@ import matplotlib
 import plotly.graph_objs as go
 import plotly.io as pio
 import math
-from scipy.ndimage import gaussian_filter
-from scipy.interpolate import interp1d
-from scipy.signal import convolve
-from scipy.ndimage import gaussian_filter1d
+import pickle
 
 
 matplotlib.use('Agg')
@@ -16,6 +13,12 @@ matplotlib.use('Agg')
 #my functions
 from essential_functions import get_data,get_custom_data,read_atomDB,clear_directory,record_pair_csv,gaussian_isf
 from AbsorptionLine import AbsorptionLine, MicroAbsorptionLine, AbsorptionLineSystem,Absorber,Custom_absorption_line
+
+
+#helper functions
+def save_object(obj, filename):
+    with open(filename, 'wb') as outp:  # Open the file in binary write mode
+        pickle.dump(obj, outp, pickle.HIGHEST_PROTOCOL)  # Pickle the object and write to file
 
 
 
@@ -149,9 +152,6 @@ class VPFit:
         sub_wavelength = self.wavelength[start_ind:stop_ind]
         sub_flux = self.flux[start_ind:stop_ind]
         sub_error = self.error[start_ind:stop_ind]
-
-        print('sub wavelength')
-        print(sub_wavelength)
 
         # Find min flux index within the selected region
         max_flux_ind = np.argmin(sub_flux)
@@ -500,6 +500,230 @@ class VPFit:
         
         # If no exact match is found within the tolerance
         return False
+    
+    def smart_find(self,start,stop):
+
+        start_ind = np.argmin(np.abs(self.wavelength - start))
+        stop_ind = np.argmin(np.abs(self.wavelength - stop))
+
+        # Slice relevant part of the arrays
+        sub_wavelength = self.wavelength[start_ind:stop_ind]
+        sub_flux = self.flux[start_ind:stop_ind]
+        sub_error = self.error[start_ind:stop_ind]
+
+        #____________________________________________________________________________________________________
+        #isolate this given line and turn it into an absorption line object
+
+        # Find min flux index within the selected region
+        max_flux_ind = np.argmin(sub_flux)
+
+        # Initialize left and right boundaries at max flux point
+        left = max_flux_ind
+        right = max_flux_ind
+
+        # Scan left until you get 2 consecutive flux > 1
+        while left > 1:
+            if sub_flux[left - 1] > 1 and sub_flux[left - 2] > 1:
+                break
+            left -= 1
+
+        # Scan right until you get 2 consecutive flux > 1
+        while right < len(sub_flux) - 2:
+            if sub_flux[right + 1] > 1 and sub_flux[right + 2] > 1:
+                break
+            right += 1
+
+        # Get final indices relative to full spectrum
+        final_start_ind = start_ind + left
+        final_stop_ind = start_ind + right + 1  # +1 to include the last point
+
+        guess_line = AbsorptionLineSystem(self,(final_start_ind,final_stop_ind))
+
+        #____________________________________________________________________________________________________
+        #check around to see if its MgII 2796 or 2803
+
+        filtered_rows = self.atomDB[self.atomDB['Transition'] == 'MgII']
+        MgII_doublet=tuple(filtered_rows['Wavelength'])
+        MgII_stregnths=tuple(filtered_rows['Strength'])
+
+        potential_matches=[]
+
+        #if given line is 2796
+        suspected_z=(guess_line.peak-MgII_doublet[0])/MgII_doublet[0]
+        z_low,z_high=(guess_line.wavelength[0]-MgII_doublet[0])/MgII_doublet[0],(guess_line.wavelength[-1]-MgII_doublet[0])/MgII_doublet[0]
+
+        for absorption in self.absorptions:
+            peak_z=(absorption.peak-MgII_doublet[1])/MgII_doublet[1]
+            if (peak_z>=z_low and peak_z<=z_high):
+                if (guess_line.equivalent_width()>absorption.equivalent_width()):
+
+                    guess_line.suspected_line=MgII_doublet[0]
+                    guess_line.name=f"MgII {MgII_doublet}"
+                    guess_line.z=suspected_z
+                    guess_line.update_line_attributes()
+
+                    absorption.suspected_line=MgII_doublet[1]
+                    absorption.name=f"MgII {MgII_doublet}"
+                    absorption.z=suspected_z
+                    absorption.update_line_attributes()
+
+                    potential_matches.append((guess_line,absorption))
+
+        #and now if given line is 2803
+        suspected_z=(guess_line.peak-MgII_doublet[1])/MgII_doublet[1]
+        z_low,z_high=(guess_line.wavelength[0]-MgII_doublet[1])/MgII_doublet[1],(guess_line.wavelength[-1]-MgII_doublet[1])/MgII_doublet[1]
+
+        for absorption in self.absorptions:
+            peak_z=(absorption.peak-MgII_doublet[1])/MgII_doublet[1]
+            if (peak_z>=z_low and peak_z<=z_high):
+                if (guess_line.equivalent_width()<absorption.equivalent_width()):
+
+                    guess_line.suspected_line=MgII_doublet[1]
+                    guess_line.name=f"MgII {MgII_doublet}"
+                    guess_line.z=suspected_z
+                    guess_line.update_line_attributes()
+
+                    absorption.suspected_line=MgII_doublet[0]
+                    absorption.name=f"MgII {MgII_doublet}"
+                    absorption.z=suspected_z
+                    absorption.update_line_attributes()
+
+                    potential_matches.append((absorption,guess_line))
+
+        for pair in potential_matches:
+            pair[0].find_N()
+            pair[1].find_N()
+
+        matches = sorted(potential_matches, key=lambda pair: abs(pair[0].N - pair[1].N))
+
+        best_pair=matches[0]
+
+        #____________________________________________________________________________________________________
+        #then make new absorber if it has a pair
+
+        custom_absorber=Absorber(best_pair[0].z,.1,best_pair)
+
+
+        #____________________________________________________________________________________________________
+        #then do the mgII search to find other elements
+
+        self.MgMatch(custom_absorber)
+
+        #____________________________________________________________________________________________________
+        #now make a flux plot and save custom absorption
+
+        # Create the plot with Plotly
+        trace_flux = go.Scatter(
+        x=self.wavelength, 
+        y=self.flux, 
+        mode='lines', 
+        name='Flux',
+        line=dict(color='black',width=1),
+        line_shape='hv'  # This makes it a horizontal-vertical step plot
+        )
+
+        trace_error = go.Scatter(
+        x=self.wavelength, 
+        y=self.error, 
+        mode='lines', 
+        name='Error', 
+        line=dict(color='red', width=1),
+        line_shape='hv'  # This makes it a horizontal-vertical step plot
+        )
+
+
+        # Initialize the list of shapes (for vertical lines)
+        shapes = [
+            # End of Lyman alpha forest
+            dict(type='line', x0=self.lyman_alpha, y0=min(self.flux), x1=self.lyman_alpha, y1=3, line=dict(color='Red', dash='dash')),
+        ]
+
+        # Initialize the list of annotations
+        annotations = []
+
+        # Highlight absorption line regions and add labels
+        for system in custom_absorber.lines.values():
+
+            start_wavelength = system.wavelength[0]
+            end_wavelength = system.wavelength[-1]
+
+            # Check if the absorption is an MgII doublet
+            if system.name is not None:
+                if system.name.split(' ')[0]=='MgII':
+                    color = 'rgba(0, 0, 0, 0.2)' #mgII is black
+
+                else:
+                    color = 'rgba(255, 165, 0, 0.3)' # other absorptions are orange
+
+            else:
+                color = 'rgba(0, 255, 0, 0.3)'  # Green for others
+
+            shapes.append(dict(
+                type='rect',
+                x0=start_wavelength,
+                x1=end_wavelength,
+                y0=min(self.flux),
+                y1=max(self.flux),
+                fillcolor=color,
+                line=dict(width=0)
+            ))
+
+            # Add annotation if the system has a known absorber
+            if hasattr(system, 'z') and hasattr(system, 'suspected_line'):
+                if system.name is None:
+                    label_text = f"Unknown"
+                else:
+                    label_text = f"z={system.z:.4f}, {system.name.split(' ')[0]}:{int(np.floor(float(system.name.split(' ')[1])))}"
+                annotations.append(dict(
+                    x=(start_wavelength + end_wavelength) / 2,  # Position annotation at the center
+                    y=3,  # Adjust y position slightly below the max flux
+                    text=label_text,
+                    showarrow=False,
+                    font=dict(size=10, color="black"),
+                    bgcolor="rgba(255,255,255,0.7)",
+                    bordercolor="black",
+                    borderwidth=1
+                ))
+
+
+            # Add annotation if the system has a known absorber
+            if hasattr(system, 'z') and hasattr(system, 'suspected_line'):
+                if system.name is None:
+                    label_text = f"Unknown"
+                else:
+                    label_text = f"z={system.z:.4f}, {system.name.split(' ')[0]}:{int(np.floor(float(system.name.split(' ')[1])))}"
+                annotations.append(dict(
+                    x=(start_wavelength + end_wavelength) / 2,  # Position annotation at the center
+                    y=3,  # Adjust y position slightly below the max flux
+                    text=label_text,
+                    showarrow=False,
+                    font=dict(size=10, color="black"),
+                    bgcolor="rgba(255,255,255,0.7)",
+                    bordercolor="black",
+                    borderwidth=1
+                ))
+                        
+            
+            layout = go.Layout(
+                title="Spectral Line Analysis",
+                xaxis=dict(title='Wavelength'),
+                yaxis=dict(title='Flux'),
+                shapes=shapes,
+                annotations=annotations
+            )
+        
+        fig = go.Figure(data=[trace_flux, trace_error], layout=layout)
+
+        # Save the interactive plot as an HTML file
+        pio.write_html(fig, file='static/Data/custom_absorber/FluxPlot.html', auto_open=False)
+
+        #____________________________________________________________________________________________________
+        #and return the custom absorber and save it too
+        save_object(custom_absorber,'static/Data/custom_absorber/custom_absorber.pkl')
+
+        print('smart find completed')
+
+        return custom_absorber
 
     
     def isNear(self, wavelength):
@@ -679,12 +903,17 @@ class VPFit:
             self.absorbers.append(Absorber(pair[0].z,pair[0].z_err,pair))
 
         
-    def MgMatch(self):
+    def MgMatch(self,absorber=None):
+
+        if absorber is None:
+            absorber_list=self.absorbers
+        else:
+            absorber_list=[absorber]
 
         lines_to_check = self.atomDB["Wavelength"].to_numpy()
         elements_to_check = self.atomDB['Transition'].to_numpy()
 
-        for i,absorber in enumerate(self.absorbers):
+        for i,absorber in enumerate(absorber_list):
 
             z=absorber.z
 
@@ -702,11 +931,11 @@ class VPFit:
 
 
             if len(MgII_1.wavelength) >= len(MgII_2.wavelength):
-                MgII_1.MgII_dimensions(MgII_1.start_ind,MgII_1.end_ind)
-                MgII_2.MgII_dimensions(MgII_1.start_ind,MgII_1.end_ind)
+                MgII_1.MgII_dimensions(MgII_1.start_ind,MgII_1.end_ind,MgII=True)
+                MgII_2.MgII_dimensions(MgII_1.start_ind,MgII_1.end_ind,MgII=True)
             else:
-                MgII_1.MgII_dimensions(MgII_2.start_ind,MgII_2.end_ind)
-                MgII_2.MgII_dimensions(MgII_2.start_ind,MgII_2.end_ind)
+                MgII_1.MgII_dimensions(MgII_2.start_ind,MgII_2.end_ind,MgII=True)
+                MgII_2.MgII_dimensions(MgII_2.start_ind,MgII_2.end_ind,MgII=True)
 
             for line in self.absorptions:
                 
@@ -736,7 +965,7 @@ class VPFit:
             if best==None:
                 continue
 
-            for i in self.absorbers:
+            for i in absorber_list:
 
                 if math.isclose(i.z,best[0],abs_tol=.01):
 
@@ -975,7 +1204,7 @@ class VPFit:
 
     def PlotFlux(self,iteration=0):
         
-                # Create the plot with Plotly
+        # Create the plot with Plotly
         trace_flux = go.Scatter(
         x=self.wavelength, 
         y=self.flux, 

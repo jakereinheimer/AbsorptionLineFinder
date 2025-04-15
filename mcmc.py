@@ -21,12 +21,62 @@ c_As = 2.9979e18
 c_kms = 2.9979e5
 k = 1.38065e-16 # erg/K
 
+def creep(total_params,line_number,line_dict,elements,mcmc_lines,direction):
+
+    num_params_per_line = 1 + 2 * len(elements)
+    param_list_2d = np.array(total_params).reshape(-1, num_params_per_line)
+
+    line_params=param_list_2d[line_number]
+
+
+    import copy
+
+    start_params=total_params
+
+    start_model, start_chi2=total_multi_model(total_params, line_dict, elements, mcmc_lines,chi2=True)
+
+    #chi2_values=[(start_chi2,total_params,start_model)]
+    chi2_values=[]
+
+    number_params_per_line=1+(2*len(elements))
+
+    for i in range(1,20):
+
+        adjusted_params=copy.deepcopy(start_params)
+        adjusted_line_params=line_params.copy()
+
+        if direction == "right":
+            adjusted_line_params[0] += i
+        elif direction == "left":
+            adjusted_line_params[0] -= i
+        else:
+            raise ValueError("Direction must be 'right' or 'left'")
+
+        adjusted_params.extend(adjusted_line_params)
+
+        model, chi2=total_multi_model(adjusted_params, line_dict, elements, mcmc_lines,chi2=True)
+        chi2_values.append((chi2,adjusted_params,model))
+
+    sorted_models=sorted(chi2_values, key= lambda item: item[0])
+    best_params=sorted_models[0][1]
+
+    print('best params from creep')
+    print(best_params)
+
+    mcmc_lines.append(mcmc_lines[line_number])
+
+    return best_params,mcmc_lines
+
+
 def plot_fits(params, line_dict, elements, mcmc_lines,file_name):
 
     import smplotlib
 
     c = 3e5
     vel_window=200
+
+    num_params_per_line = 1 + 2 * len(elements)
+    param_list_2d = np.array(params).reshape(-1, num_params_per_line)
 
 
     models=total_multi_model(params,line_dict,elements,mcmc_lines,high_resolution=True)
@@ -63,14 +113,14 @@ def plot_fits(params, line_dict, elements, mcmc_lines,file_name):
         #chi squared
         obs_flux = line.MgII_flux
         model_flux = standard_models[name]
-        errors = line.MgII_errors
+        errors = np.sqrt(line.MgII_errors)
 
         # Calculate chi-squared and reduced chi-squared
         chi_squared = np.sum(((obs_flux - model_flux) / errors) ** 2)
-        degrees_of_freedom = len(obs_flux) - len(params)  # Adjust the number of parameters as needed
+        degrees_of_freedom = len(obs_flux) - (len(mcmc_lines)*3)
         reduced_chi_squared = chi_squared / degrees_of_freedom if degrees_of_freedom != 0 else 0
 
-        ax.text(vel_window-60, 0.2, f"$\chi^2_{{red}}={reduced_chi_squared:.2f}$")
+        ax.text(vel_window-60, 0.3, f"$\chi^2_{{red}}={reduced_chi_squared:.2f}$")
 
         #actual plot
         reference_microline=(reference_z+1)*line.suspected_line
@@ -85,20 +135,13 @@ def plot_fits(params, line_dict, elements, mcmc_lines,file_name):
 
         ax.step(np.linspace(velocity[0],velocity[-1],len(velocity)*10), models.get(name), where='mid', label=f"Model", color="red")
 
-        for i,mcmc_line_obj in enumerate(mcmc_lines):
+        for i,line_params in enumerate(param_list_2d):
 
-            params_per_microline=1+(2*len(elements))
+            z=velocity_to_redshift(line_params[0])
+            wavelength = line.suspected_line * (1+z)
+            velocity =  (wavelength - reference_microline) / reference_microline * c
 
-            line_params=params[i*params_per_microline:(i*params_per_microline)+params_per_microline]
-
-            microline_vel = (line_params[0] - reference_velocity) *1.25
-
-            print('microlines')
-            print(microline_vel)
-
-            #microline_vel = reference_velocity - line_params[0]
-
-            ax.vlines(microline_vel, ymin=1.2,ymax=1.3,color='blue')
+            ax.vlines(velocity, ymin=1.2,ymax=1.3,color='blue')
         
         '''
         for microline in line.mcmc_microlines:
@@ -106,7 +149,7 @@ def plot_fits(params, line_dict, elements, mcmc_lines,file_name):
             #ax.axvspan(microline_vel[0], microline_vel[-1], color='grey', alpha=0.3)
             ax.vlines(microline_vel[np.argmin(microline.flux)], ymin=1.2,ymax=1.3)'''
         
-        ax.text(vel_window-60,0,f'{name.split(" ")[0]} {int(np.floor(float(name.split(" ")[1])))}')
+        ax.text(vel_window-60,0.1,f'{name.split(" ")[0]} {int(np.floor(float(name.split(" ")[1])))}')
         ax.set_xlim(-vel_window, vel_window)
 
     # Label axes and configure layout
@@ -164,11 +207,15 @@ def log_probability(params, lines, AtomDB, element):
         return -np.inf
     return lp + log_likelihood(params, lines, AtomDB, element)
 
-def total_multi_model(params, line_dict, elements, mcmc_lines, convolve_data=True,high_resolution=False):
+def total_multi_model(params, line_dict, elements, mcmc_lines, convolve_data=True,high_resolution=False,chi2=False):
 
     params_per_microline=(2*len(elements))+1
+    param_list_2d = np.array(params).reshape(-1, params_per_microline)
 
     models={}
+
+    if chi2:
+        chi_value=0
 
     for key,line in line_dict.items():
 
@@ -180,9 +227,7 @@ def total_multi_model(params, line_dict, elements, mcmc_lines, convolve_data=Tru
 
         models[key]=np.ones_like(wavelength)
 
-        for i,mcmc_line_obj in enumerate(mcmc_lines):
-
-            line_params=params[i*params_per_microline:(i*params_per_microline)+params_per_microline]
+        for i,line_params in enumerate(param_list_2d):
 
             velocity=line_params[0]
 
@@ -199,7 +244,18 @@ def total_multi_model(params, line_dict, elements, mcmc_lines, convolve_data=Tru
                     if convolve_data:
                         models[key] = convolve_flux(wavelength, models[key])
 
-    return models
+                    if chi2:
+                        obs_flux = line.MgII_flux
+                        model_flux = models[key]
+                        errors = np.sqrt(line.MgII_errors)
+
+                        # Calculate chi-squared and reduced chi-squared
+                        chi_value+= np.sum(((obs_flux - model_flux) / errors) ** 2)
+
+    if chi2:
+        return models,chi_value
+    else:
+        return models
 
 def log_multi_likelihood(params, lines, elements, mcmc_lines):
 
@@ -260,6 +316,7 @@ def run_multi_mcmc(absorber,elements,nsteps=1000,nwalkers=250):
 
 
     line_list = line_dict.values()
+
     '''
     for line in line_list:
 
@@ -285,9 +342,10 @@ def run_multi_mcmc(absorber,elements,nsteps=1000,nwalkers=250):
     def get_n_microlines(line):
             return len(line.mcmc_microlines)
     
-    if custom:
-        for line in line_list:
+    for line in line_list:
             line.find_mcmc_microlines()
+    
+    if custom:
         strong_line=max(line_list, key= get_n_microlines)
     else:
         strong_line=line_dict.get('MgII 2796.355099')
@@ -304,12 +362,12 @@ def run_multi_mcmc(absorber,elements,nsteps=1000,nwalkers=250):
 
         mcmc_lines.append(mcmc_line(microline,elements))
 
-        if microline.is_saturated:
-            if microline.saturation_direction == 'right':
-                mcmc_lines.append(mcmc_line(microline,elements,'right'))
+        #if microline.is_saturated:
+        #    if microline.saturation_direction == 'right':
+        #        mcmc_lines.append(mcmc_line(microline,elements,'right'))
 
-            elif microline.saturation_direction == 'left':
-                mcmc_lines.append(mcmc_line(microline,elements,'left'))
+        #   elif microline.saturation_direction == 'left':
+        #        mcmc_lines.append(mcmc_line(microline,elements,'left'))
 
     #so this makes n number of lines, which represent different microlines in mgII that are present
     #next we need to go through and add lines which correspond to that z of the microline of other elments
@@ -371,8 +429,31 @@ def run_multi_mcmc(absorber,elements,nsteps=1000,nwalkers=250):
 
         initial_guesses.extend(line.export_params())
 
+    param_list = [line.export_params() for line in mcmc_lines]
+    initial_guesses_2d=np.array(param_list)
+
+    print('initial guesses before creep')
+    print(initial_guesses_2d)
+
+
+    for i,microline in enumerate(strong_line.mcmc_microlines):
+
+        if microline.is_saturated:
+            if microline.saturation_direction == 'right':
+                print('creeping right')
+                initial_guesses,mcmc_lines=creep(initial_guesses,i,line_dict,elements,mcmc_lines,direction='right')
+
+            elif microline.saturation_direction == 'left':
+                print('creeping left')
+                initial_guesses,mcmc_lines=creep(initial_guesses,i,line_dict,elements,mcmc_lines,direction='left')
+
+    print('initial guesses after creep')
+    print(initial_guesses)
 
     initial_guesses=optimize_params(initial_guesses,line_dict,elements,mcmc_lines)
+
+    print('initial guesses after optimization')
+    print(initial_guesses)
 
     #_________________________________________________________________________________________  
     #plot all initial guesses
@@ -1087,18 +1168,19 @@ def optimize_params(initial_params,line_dict,elements,mcmc_lines):
 
     from lmfit import Parameters, minimize, Minimizer
 
+    num_params_per_line = 1 + (2 * len(elements))
+    reshaped_array = np.array(initial_params).reshape(-1, num_params_per_line)
+
     params = Parameters()
 
-    for i,mcmc_line_obj in enumerate(mcmc_lines):
-
-        line_params=mcmc_line_obj.export_params()
+    for i,line_params in enumerate(reshaped_array):
 
         params.add(f'Component_{i}_velocity', line_params[0], min=0.0,max=redshift_to_velocity(2))
 
         for j,e in enumerate(elements):
 
-            params.add(f'Component_{i}_{e}_LogN',line_params[(2*j)+1],min=0.0,max=20.0)
-            params.add(f'Component_{i}_{e}_b',line_params[(j*2)+2],min=0.0,max=20.0)
+            params.add(f'Component_{i}_{e}_LogN',line_params[(2*j)+1],min=0.0,max=15.0)
+            params.add(f'Component_{i}_{e}_b',line_params[(j*2)+2],min=0.0,max=15.0)
 
     #print('print')
     #print(params)
@@ -1111,7 +1193,8 @@ def optimize_params(initial_params,line_dict,elements,mcmc_lines):
 
     #print(help(minimize))
 
-    result = minimize(objective_function,params,args=(line_dict,elements,mcmc_lines),nan_policy='omit',max_nfev=10000)
+    result = minimize(objective_function,params,args=(line_dict,elements,mcmc_lines),nan_policy='omit')
+    #max_nfev=50000
     #print(help(result))
 
 

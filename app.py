@@ -6,6 +6,8 @@ from werkzeug.utils import secure_filename
 from flask import flash
 import numpy as np
 import multiprocessing
+from matplotlib.widgets import SpanSelector
+import mpld3
 
 from VPFit import VPFit
 from TNG_trident import Sim_spectra
@@ -222,14 +224,7 @@ def show_results():
     for absorber in absorbers:
         absorber.make_vel_plot('MgII')
 
-    update_flag = os.path.exists('update_flag.txt')
-    if update_flag:
-        print('Update flag detected, refreshing')
-        os.remove('update_flag.txt')  # Reset flag
-
-    return render_template('results.html', absorbers=absorbers, custom_absorptions=custom_absorptions, update_flag=update_flag)
-
-
+    return render_template('results.html', absorbers=absorbers, custom_absorptions=custom_absorptions)
 
 
 @app.route('/update_plot', methods=['POST'])
@@ -344,13 +339,18 @@ def multi_mcmc():
     mcmc_steps = int(request.form.get('multi_mcmc_steps', 1000))
     mcmc_walkers = int(request.form.get('multi_mcmc_walkers', 250))
 
-    absorbers = [load_object(os.path.join('Absorbers/objs/', item)) 
-                    for item in os.listdir('Absorbers/objs/') if item.endswith('.pkl')]
+    if absorber_index==100:
+        absorber=load_object('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/Data/custom_absorber/custom_absorber.pkl')
 
-    if absorber_index >= len(absorbers):
-        return jsonify({'error': 'Invalid absorber index'}), 400
+    else:
 
-    absorber = absorbers[absorber_index]
+        absorbers = [load_object(os.path.join('Absorbers/objs/', item)) 
+                        for item in os.listdir('Absorbers/objs/') if item.endswith('.pkl')]
+
+        if absorber_index >= len(absorbers):
+            return jsonify({'error': 'Invalid absorber index'}), 400
+
+        absorber = absorbers[absorber_index]
 
     # Run the multi_mcmc function with the selected elements
     absorber.multi_mcmc(element_list, nsteps=mcmc_steps, nwalkers=mcmc_walkers)
@@ -367,6 +367,46 @@ def multi_mcmc():
     #except Exception as e:
     #    print(f"Error running multi MCMC: {e}")
     #    return f"Error: {e}", 500
+
+@app.route('/data')
+def data():
+
+    vp = load_object(f'/Users/jakereinheimer/Desktop/Fakhri/VPFit/saved_objects/{session.get("selected_catalog")}/{session.get("selected_spectrum")}_vpfit.pkl')
+
+    wavelength = vp.wavelength
+    flux = vp.flux
+    error = vp.error
+
+    return jsonify(wavelength=wavelength.tolist(), flux=flux.tolist(), error=error.tolist())
+
+
+
+@app.route('/save_selection', methods=['POST'])
+def save_selection():
+
+    vp = load_object(f'/Users/jakereinheimer/Desktop/Fakhri/VPFit/saved_objects/{session.get("selected_catalog")}/{session.get("selected_spectrum")}_vpfit.pkl')
+
+    data = request.json
+    xmin = data['xmin']
+    xmax = data['xmax']
+
+    #try:
+    vp.smart_find(float(xmin), float(xmax))  # Process the selection
+    return jsonify({'success': True})
+    #except Exception as e:
+    #    return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/show_custom_results', methods=['GET'])
+def show_custom_results():
+    
+    custom_absorber=load_object('static/Data/custom_absorber/custom_absorber.pkl')
+
+    custom_absorber_fluxplot=url_for('static', filename='Data/custom_absorber/FluxPlot.html')
+
+    return render_template('custom_absorber_page.html',
+                           absorber=custom_absorber,
+                           fluxplot=custom_absorber_fluxplot
+                            )
 
     
 

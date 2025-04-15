@@ -77,7 +77,7 @@ class mcmc_line:
 
             else:
                 if self.saturation:
-                    log_N = line_to_use.logN-1
+                    log_N = line_to_use.logN
                 else:
                     log_N=line_to_use.logN
 
