@@ -7,12 +7,11 @@ from flask import flash
 import numpy as np
 import multiprocessing
 from matplotlib.widgets import SpanSelector
-import mpld3
 
 from VPFit import VPFit
 from TNG_trident import Sim_spectra
 from essential_functions import clear_directory,get_data
-from mcmc import run_mcmc,run_multi_mcmc,continue_mcmc
+from mcmc import run_mcmc,run_multi_mcmc,continue_mcmc,pre_mcmc,update_fit,mcmc
 from AbsorptionLine import AbsorptionLine,AbsorptionLineSystem
 
 #helper functions
@@ -330,6 +329,8 @@ def mcmc_for_lines():
 @app.route('/multi_mcmc', methods=['POST'])
 def multi_mcmc():
 
+    from random import random
+
     clear_directory('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/Data/multi_mcmc/final')
     clear_directory('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/Data/multi_mcmc/initial')
 
@@ -352,10 +353,89 @@ def multi_mcmc():
 
         absorber = absorbers[absorber_index]
 
-    # Run the multi_mcmc function with the selected elements
-    absorber.multi_mcmc(element_list, nsteps=mcmc_steps, nwalkers=mcmc_walkers)
+    initial_guesses,line_dict=pre_mcmc(absorber,element_list)
 
-    print(f'Multi MCMC succeeded for elements: {element_list}')
+    num_params_per_line = 1 + 2 * len(element_list)
+    param_list_2d = np.array(initial_guesses).reshape(-1, num_params_per_line)
+
+    column_names=['Velocity']
+    for e in element_list:
+        column_names.append(f'LogN {e}')
+        column_names.append(f'b {e}')
+
+    num_rows=len(param_list_2d)
+    num_cols=len(param_list_2d[0])
+    statuses = []
+
+    for i in range(num_rows):
+        status_row = []
+        for j in range(num_cols):
+            status = 'free'
+            status_row.append(status)
+        statuses.append(status_row)
+
+    save_object(column_names,'static/Data/multi_mcmc/initial/column_names.pkl')
+    save_object(param_list_2d,'static/Data/multi_mcmc/initial/initial_guesses.pkl')
+    save_object(param_list_2d,'static/Data/multi_mcmc/initial/algo_guesses.pkl')
+
+    return render_template('pre_mcmc.html',
+                           parameters=param_list_2d,
+                           statuses=statuses,
+                           line_dict=line_dict,
+                           column_names=column_names,
+                           random=random()
+                           )
+
+@app.route('/mcmc_param_update', methods=['POST'])
+def mcmc_param_update():
+
+    from random import random
+
+
+    param_list_2d=load_object('static/Data/multi_mcmc/initial/initial_guesses.pkl')
+    num_rows=len(param_list_2d)
+    num_cols=len(param_list_2d[0])
+
+    params = []
+    statuses = []
+
+    for i in range(num_rows):
+        param_row = []
+        status_row = []
+        for j in range(num_cols):
+            val = float(request.form[f'param_{i}_{j}'])
+            status = request.form[f'status_{i}_{j}']
+            param_row.append(val)
+            status_row.append(status)
+        params.append(param_row)
+        statuses.append(status_row)
+
+    element_list=load_object('static/Data/multi_mcmc/initial/initial_element_list.pkl')
+    line_dict=load_object('static/Data/multi_mcmc/initial/initial_line_dict.pkl')
+    column_names=load_object('static/Data/multi_mcmc/initial/column_names.pkl')
+    
+    save_object(statuses,'static/Data/multi_mcmc/initial/initial_statuses.pkl')
+
+    update_fit(params,element_list)
+
+    return render_template('pre_mcmc.html',
+                           parameters=params,
+                           statuses=statuses,
+                           line_dict=line_dict,
+                           column_names=column_names,
+                           random=random()
+                           )
+
+
+@app.route('/actual_mcmc', methods=['POST'])
+def actual_mcmc():
+
+    params = load_object('static/Data/multi_mcmc/initial/initial_guesses.pkl')
+    statuses = load_object('static/Data/multi_mcmc/initial/initial_statuses.pkl')
+    mcmc_steps = int(request.form.get('mcmc_steps', 1000))
+    mcmc_walkers = int(request.form.get('mcmc_walkers', 250))
+
+    mcmc(params,statuses,mcmc_steps,mcmc_walkers)
 
     return render_template('mcmc_results.html',
                             fit_plot_url = url_for('static', filename='Data/multi_mcmc/final/final_models.png'),
@@ -364,6 +444,20 @@ def multi_mcmc():
                             corner_plot_url=url_for('static', filename='Data/multi_mcmc/final/mcmc_corner.png'),
                             mcmc_steps=mcmc_steps,
                             mcmc_walkers=mcmc_walkers)
+
+    '''
+    # Run the multi_mcmc function with the selected elements
+    #absorber.multi_mcmc(element_list, nsteps=mcmc_steps, nwalkers=mcmc_walkers)
+
+    #print(f'Multi MCMC succeeded for elements: {element_list}')
+
+    return render_template('mcmc_results.html',
+                            fit_plot_url = url_for('static', filename='Data/multi_mcmc/final/final_models.png'),
+                            plot_url=url_for('static', filename='Data/multi_mcmc/final/mcmc_results.csv'),
+                            trace_plot_url=url_for('static', filename='Data/multi_mcmc/final/mcmc_trace.png'),
+                            corner_plot_url=url_for('static', filename='Data/multi_mcmc/final/mcmc_corner.png'),
+                            mcmc_steps=mcmc_steps,
+                            mcmc_walkers=mcmc_walkers)'''
     #except Exception as e:
     #    print(f"Error running multi MCMC: {e}")
     #    return f"Error: {e}", 500

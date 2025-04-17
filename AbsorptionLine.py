@@ -11,6 +11,9 @@ import io
 import base64
 import smplotlib as sm
 from scipy.integrate import simps
+import plotly.graph_objs as go
+import plotly
+import json
 
 from essential_functions import read_atomDB,clear_directory
 #from mcmc import run_mcmc
@@ -428,25 +431,6 @@ class AbsorptionLineSystem:
             microline.suspected_line=self.suspected_line
             microline.f=self.f
             microline.gamma=self.gamma
-    
-
-    def calculate_N(self):
-
-        N=0
-        N_err=0
-
-        self.update_microlines()
-
-        for microline in self.microLines:
-
-            found_N,found_N_err=microline.find_N()
-            N+=found_N
-            N_err+=found_N_err
-
-        self.N=N
-        self.N_err=N_err
-        self.log_N=np.log10(N)
-        self.log_N_err=np.log10(N_err)
 
             
 
@@ -550,8 +534,51 @@ class AbsorptionLineSystem:
         self.log_N=np.log10(N)
 
         return N
+    
+    def store_model(self,wave,model):
+        self.model_wavelength=wave
+        self.model=model
         
 
+    def plotly_plot(self):
+
+        fig=go.Figure()
+
+        fig.add_trace(go.Scatter(
+            x=self.extra_wavelength,
+            y=self.extra_flux,
+            mode='lines',
+            name='full data'
+        ))
+
+        fig.add_trace(go.Scatter(
+            x=self.MgII_wavelength,
+            y=self.MgII_flux,
+            mode='lines',
+            name='MgII data'
+        ))
+
+        fig.add_trace(go.Scatter(
+            x=self.model_wavelength,
+            y=self.model,
+            mode='lines',
+            name='Model'
+        ))
+
+        for mcmc_line_obj in self.mcmc_microlines:
+
+            fig.add_shape(
+                type="rect",
+                x0=mcmc_line_obj.wavelength[0], x1=mcmc_line_obj.wavelength[-1],
+                y0=0,y1=1,
+                fillcolor='gray',
+                opacity=0.5,
+                line_width=0,
+                editable=True
+            )
+
+        self.graphJSON= json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)
+        return self.graphJSON
 
         
     def plot(self,name):

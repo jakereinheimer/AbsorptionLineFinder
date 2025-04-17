@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-store" />
+    <title>Pre-MCMC</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .content-container {
+            display: flex;
+            gap: 40px;
+            align-items: flex-start;
+        }
+
+        .image-container img {
+            max-width: 100%;
+            height: auto;
+        }
+
+        .table-container {
+            text-align: center;
+        }
+
+        table {
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+
+        td {
+            padding: 6px;
+            position: relative;
+        }
+
+        input[type="text"] {
+            width: 60px;
+            text-align: center;
+        }
+
+        .button-container {
+            display: flex;
+            gap: 2px;
+            justify-content: center;
+            margin-top: 2px;
+        }
+
+        .small-btn {
+            padding: 2px 5px;
+            font-size: 10px;
+        }
+    </style>
+    
+</head>
+
+<script>
+    function fixParam(i, j) {
+        const statusInput = document.getElementById(`status_${i}_${j}`);
+        const cell = document.getElementById(`cell_${i}_${j}`);
+        const isFixed = statusInput.value === 'fixed';
+    
+        statusInput.value = isFixed ? 'free' : 'fixed';
+        cell.style.backgroundColor = isFixed ? '' : '#ffdddd';  // light red for fixed
+    }
+    
+    function anchorParam(i, j) {
+        const select = document.getElementById(`anchor_select_${i}_${j}`);
+        select.style.display = (select.style.display === 'none') ? 'block' : 'none';
+    }
+    
+    function setAnchor(i, j, selectElement) {
+        const value = selectElement.value;
+        const statusInput = document.getElementById(`status_${i}_${j}`);
+        const cell = document.getElementById(`cell_${i}_${j}`);
+        
+        if (value) {
+            statusInput.value = `anchor_to:${value}`;
+            cell.style.backgroundColor = '#ddf';  // light blue for anchor
+        } else {
+            statusInput.value = 'free';
+            cell.style.backgroundColor = '';
+        }
+    }
+</script>
+
+<body>
+
+    <div class="content-container">
+        <div class="image-container">
+            <img src="/static/Data/multi_mcmc/initial/initial_guesses.png" alt="Initial Guesses" width="50%">
+        </div>
+
+        <div class="table-container">
+            <h1>Parameters</h1>
+            <form action="/mcmc_param_update" method="post">
+                <table>
+                    <thead>
+                        <tr>
+                            <th></th>  <!-- top-left blank -->
+                            {% for col in column_names %}
+                                <th>{{ col }}</th>
+                            {% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in parameters %}
+                            {% set i = loop.index0 %}
+                            <tr>
+                                <th>Component {{ i }}</th>
+                                {% for value in row %}
+                                    {% set j = loop.index0 %}
+                                    <td id="cell_{{ i }}_{{ j }}">
+                                        <script>
+                                            const status = "{{ statuses[i][j] }}";
+                                            const cell = document.getElementById("cell_{{ i }}_{{ j }}");
+                                            if (status === "fixed") {
+                                                cell.style.backgroundColor = "#ffdddd";
+                                            } else if (status.startsWith("anchor_to:")) {
+                                                cell.style.backgroundColor = "#ddf";
+                                                document.getElementById("anchor_select_{{ i }}_{{ j }}").value = status.split(":")[1];
+                                                document.getElementById("anchor_select_{{ i }}_{{ j }}").style.display = "block";
+                                            }
+                                        </script>
+                                        
+                                        <input type="text" name="param_{{ i }}_{{ j }}" value="{{ value }}">
+                                        <input type="hidden" name="status_{{ i }}_{{ j }}" id="status_{{ i }}_{{ j }}" value="{{ statuses[i][j] }}">
+                                        
+                                        <div class="button-container">
+                                            <button type="button" class="small-btn" onclick="fixParam({{ i }}, {{ j }})">Fix</button>
+                                            <button type="button" class="small-btn" onclick="anchorParam({{ i }}, {{ j }})">Anchor</button>
+                                        </div>
+                        
+                                        <select onchange="setAnchor({{ i }}, {{ j }}, this)" style="display:none" id="anchor_select_{{ i }}_{{ j }}">
+                                            <option value="">--Select--</option>
+                                            {% for m in range(parameters|length) %}
+                                                <option value="{{ m }}">Component {{ m }}</option>
+                                            {% endfor %}
+                                        </select>
+                                    </td>
+                                {% endfor %}
+                            </tr>
+                        {% endfor %}
+                        </tbody>                        
+                </table>
+                <br>
+                <input type="submit" value="Update">
+            </form>
+
+            <form action="{{ url_for('actual_mcmc') }}" method="post">
+
+                <h2> </h2>
+                
+                <h2>Please update the parameters before running!</h2>
+        
+                <label for="mcmc_steps">MCMC Steps:</label>
+                <input type="number" id="mcmc_steps" name="mcmc_steps" value="1000" min="100" max="100000" required>
+        
+                <label for="mcmc_walkers">MCMC Walkers:</label>
+                <input type="number" id="mcmc_walkers" name="mcmc_walkers" value="250" min="10" max="1000" required>
+        
+                <button type="submit">Run MCMC</button>
+            </form>
+        </div>
+    </div>
+
+</body>
+
+</html>

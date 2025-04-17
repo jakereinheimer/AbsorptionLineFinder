@@ -97,6 +97,49 @@ def redshift_to_velocity(redshift):
     c = 299792.458  # Speed of light in km/s
     return c * ((1 + redshift)**2 - 1) / ((1 + redshift)**2 + 1)
 
+def parse_statuses(statuses, initial_guesses):
+    free_indices = []
+    fixed_values = {}
+    anchor_map = {}
+
+    num_rows = len(statuses)
+    num_cols = len(statuses[0])
+
+    for i in range(num_rows):
+        for j in range(num_cols):
+            status = statuses[i][j]
+            if status == 'free':
+                free_indices.append((i, j))
+            elif status == 'fixed':
+                fixed_values[(i, j)] = initial_guesses[i][j]
+            elif status.startswith('anchor_to:'):
+                target = status.split(':')[1]
+                if '_' in target:
+                    ti, tj = map(int, target.split('_'))
+                else:
+                    ti = int(target)
+                    tj = j  # anchor to the same parameter index
+                anchor_map[(i, j)] = (ti, tj)
+            else:
+                raise ValueError(f"Unknown status {status} at ({i},{j})")
+    
+    return free_indices, fixed_values, anchor_map
+
+def rebuild_full_params(free_values, free_indices, fixed_values, anchor_map, shape):
+    full_params = np.zeros(shape)
+
+    for (i, j), val in fixed_values.items():
+        full_params[i, j] = val
+
+    for idx, (i, j) in enumerate(free_indices):
+        full_params[i, j] = free_values[idx]
+
+    for (i, j), (ti, tj) in anchor_map.items():
+        full_params[i, j] = full_params[ti, tj]
+
+    return full_params.flatten()
+
+
 
 #not used:
 def interpolate_spectrum(wavelength, flux, error, original_resolution, target_resolution):
