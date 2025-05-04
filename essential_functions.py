@@ -89,23 +89,78 @@ def get_data(folder,catalog,name):
 
     elif catalog=="test":
 
-        file_path = f'/Users/jakereinheimer/Desktop/Fakhri/data/test/{name}/'  # Replace with the actual path to your FITS file
+        if name=='test3':
 
-        #flux
-        with fits.open(file_path+"test_f.fits") as hdul:
-            flux_data = np.array(hdul[0].data)
+            file_path = f'/Users/jakereinheimer/Desktop/Fakhri/data/test/{name}/'  # Replace with the actual path to your FITS file
 
-        #error
-        with fits.open(file_path+"test_e.fits") as hdul:
-            error_data = np.array(hdul[0].data)
+            #flux
+            with fits.open(file_path+"flx.fits") as hdul:
+                flux_data = np.array(hdul[0].data)
 
-        #wave
-        with fits.open(file_path+"test_wav.fits") as hdul:
-            wavelength_data = np.array(hdul[0].data)
+            #error
+            with fits.open(file_path+"erf.fits") as hdul:
+                error_data = np.array(hdul[0].data)
+
+            #wave
+            with fits.open(file_path+"wav.fits") as hdul:
+                wavelength_data = np.array(hdul[0].data)
+
+            found_redshift=2.1 #idk
+
+            #wavelength_data,flux_data,error_data=run_nmf(wavelength_data,flux_data,error_data)
+
+        else:
+
+            file_path = f'/Users/jakereinheimer/Desktop/Fakhri/data/test/{name}/'  # Replace with the actual path to your FITS file
+
+            #flux
+            with fits.open(file_path+"test_f.fits") as hdul:
+                flux_data = np.array(hdul[0].data)
+
+            #error
+            with fits.open(file_path+"test_e.fits") as hdul:
+                error_data = np.array(hdul[0].data)
+
+            #wave
+            with fits.open(file_path+"test_wav.fits") as hdul:
+                wavelength_data = np.array(hdul[0].data)
+
+            found_redshift=2.1 #idk
+
+            wavelength_data,flux_data,error_data=run_nmf(wavelength_data,flux_data,error_data)
+
+    elif catalog=="DESI":
+
+        pass
+
+    elif catalog=="Secret_data":
+
+        file_path = f'/Users/jakereinheimer/Desktop/Fakhri/data/{catalog}/{name}/'  # Replace with the actual path to your FITS file
+
+        files=os.listdir(file_path)
+
+        print(files)
+
+        for file in files:
+
+            print(file)
+
+            if 'flx' in file:
+                with fits.open(os.path.join(file_path,file)) as hdul:
+                    flux_data = np.array(hdul[0].data)
+
+            elif 'erf' in file:
+                with fits.open(os.path.join(file_path,file)) as hdul:
+                    error_data = np.array(hdul[0].data)
+
+            elif 'wav' in file:
+                with fits.open(os.path.join(file_path,file)) as hdul:
+                    wavelength_data = np.array(hdul[0].data)
+
+            else:
+                raise "SOMETHING IS WRONG"
 
         found_redshift=2.1 #idk
-
-        wavelength_data,flux_data,error_data=run_nmf(wavelength_data,flux_data,error_data)
 
 
 
@@ -144,26 +199,78 @@ def get_data(folder,catalog,name):
     return (flux_data,error_data,wavelength_data,found_redshift)
 
 
-def get_custom_data(loc):
+import os
+import pandas as pd
+from astropy.io import fits
+
+def get_custom_data(file_list, nmf=False):
+    # Handle if loc is a directory
+
+    wavelength = flux = error = None
+
+    if len(file_list)>1:
+
+        for fname in file_list:
+            if fname.endswith('.fits'):
+                if 'wav' in fname:
+                    with fits.open(fname) as hdul:
+                        wavelength = np.array(hdul[0].data)
+
+                if 'flx' in fname:
+                    with fits.open(fname) as hdul:
+                        flux = np.array(hdul[0].data)
+
+                if ('erf' in fname) or ('var' in fname):
+                    with fits.open(fname) as hdul:
+                        error = np.array(hdul[0].data)
+
+                continue
     
-    df=pd.read_csv(loc)
+    else:
 
-    try:
-        wavelength=df['Wavelength'].to_numpy()
-    except:
-        wavelength=df['wavelength'].to_numpy()
-    try:
-        flux=df['Flux'].to_numpy()
-    except:
-        flux=df['flux'].to_numpy()
-    try:
-        error=df['Error'].to_numpy()
-    except:
-        error=df['error'].to_numpy()
+        file=file_list[0]
 
-    found_redshift=2
+        # Handle FITS files
+        if file.endswith('.fits'):
+            with fits.open(file) as hdul:
+                data = hdul[1].data  # Assuming 1st extension contains the table
+                wavelength = data['wavelength']
+                flux = data['flux']
+                error = data['error']
 
-    return (flux,error,wavelength,found_redshift)
+        # Handle XSPEC files (assuming it's ASCII with columns)
+        elif file.endswith('.xspec'):
+            df = pd.read_csv(file, delim_whitespace=True, comment='#')
+            wavelength = df['wavelength'].to_numpy()
+            flux = df['flux'].to_numpy()
+            error = df['error'].to_numpy()
+
+        # Handle CSV files (your original logic)
+        elif file.endswith('.csv'):
+            df = pd.read_csv(file)
+            wavelength = df.get('Wavelength', df.get('wavelength')).to_numpy()
+            flux = df.get('Flux', df.get('flux', df.get('NMF_flux'))).to_numpy()
+            error = df.get('Error', df.get('error', df.get('NMF_error'))).to_numpy()
+
+        else:
+            raise ValueError(f"Unsupported file type: {file}")
+
+    # Default redshift (maybe detect in the future)
+    found_redshift = 2
+
+    if wavelength is None:
+        raise ValueError("Missing wavelength file")
+    if flux is None:
+        raise ValueError("Missing flux file")
+    if error is None:
+        raise ValueError("Missing error file")
+
+    # Apply NMF if requested
+    if nmf:
+        wavelength, flux, error = run_nmf(wavelength, flux, error)
+
+    return flux, error, wavelength, found_redshift
+
 
 def gaussian_isf(resolution, width=5):
     from scipy.stats import norm

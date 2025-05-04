@@ -7,6 +7,8 @@ import plotly.io as pio
 import math
 import pickle
 
+c_kms = 2.99792458e5  # speed of light in km/s
+
 
 matplotlib.use('Agg')
 
@@ -33,9 +35,12 @@ class VPFit:
 
         
         if catalog=='custom':
-            self.flux,self.error,self.wavelength,self.emitter_redshift=get_custom_data(data_loc)
-            self.p=4
-            self.N=3
+            if name=='NMF':
+                self.flux,self.error,self.wavelength,self.emitter_redshift=get_custom_data(data_loc,nmf=True)
+            else:
+                self.flux,self.error,self.wavelength,self.emitter_redshift=get_custom_data(data_loc)
+                self.p=4
+                self.N=3
 
         else:
             self.flux,self.error,self.wavelength,self.emitter_redshift=get_data(data_loc,catalog,name)
@@ -53,7 +58,7 @@ class VPFit:
             self.p=4
             self.N=3
             self.fwhm=7.5
-            self.tolerance_absorption_systems=50
+            self.tolerance_absorption_systems=30
 
         elif catalog=="test2":
             self.p=4
@@ -80,6 +85,12 @@ class VPFit:
             # Extract 'ZABS' values as a list
             self.zhu_abs = result_df['ZABS'].tolist()
             self.zhu_abs_err = result_df['ERR_ZABS'].tolist()
+
+        else:
+            self.p=4
+            self.N=3
+            self.fwhm=7.5
+            self.tolerance_absorption_systems=30
 
 
         #correct sky lines
@@ -119,21 +130,6 @@ class VPFit:
         self.no_forrest_error=np.array(self.error[self.wavelength>self.lyman_alpha])
 
 
-        '''
-        if smoothing:
-            std=np.std(self.no_forrest_flux)
-            for i,point in enumerate(self.no_forrest_flux):
-
-                #catch first and last so no error
-                if i==0 or i==len(self.no_forrest_flux)-1:
-                    continue
-
-                if self.no_forrest_flux[i] < .5 and self.no_forrest_flux[i-1] >= (1-std) and self.no_forrest_flux[i+1] >= (1-std):
-
-                    self.no_forrest_flux[i] = (self.no_forrest_flux[i-1]+self.no_forrest_flux[i+1])/2
-                '''
-
-
         
         print(f"Examining: {self.object_name}")
         print(f'z: {self.emitter_redshift}')
@@ -153,41 +149,13 @@ class VPFit:
         sub_flux = self.flux[start_ind:stop_ind]
         sub_error = self.error[start_ind:stop_ind]
 
-        # Find min flux index within the selected region
-        max_flux_ind = np.argmin(sub_flux)
+        microlines=self.optimizedMethod(sub_wavelength,sub_flux,sub_error,beg_ind=start_ind,N=4)
 
-        # Initialize left and right boundaries at max flux point
-        left = max_flux_ind
-        right = max_flux_ind
+        abs=AbsorptionLineSystem(self,microlines,full=True)
 
-        # Scan left until you get 2 consecutive flux > 1
-        while left > 1:
-            if sub_flux[left - 1] > 1 and sub_flux[left - 2] > 1:
-                break
-            left -= 1
+        abs.set_line_info(element,transition)
 
-        # Scan right until you get 2 consecutive flux > 1
-        while right < len(sub_flux) - 2:
-            if sub_flux[right + 1] > 1 and sub_flux[right + 2] > 1:
-                break
-            right += 1
-
-        # Get final indices relative to full spectrum
-        final_start_ind = start_ind + left
-        final_stop_ind = start_ind + right + 1  # +1 to include the last point
-
-        # Slice the full wavelength, flux, error arrays
-        final_wavelength = self.wavelength[final_start_ind:final_stop_ind]
-        final_flux = self.flux[final_start_ind:final_stop_ind]
-        final_error = self.error[final_start_ind:final_stop_ind]
-
-        # Create the absorption line object
-        absorption = Custom_absorption_line(final_wavelength, final_flux, final_error, element, transition)
-
-        padding=300
-        absorption.bonus(self.wavelength[final_start_ind-padding:final_stop_ind+padding],self.flux[final_start_ind-padding:final_stop_ind+padding],self.error[final_start_ind-padding:final_stop_ind+padding])
-
-        return absorption
+        return abs
 
 
     def ApertureMethod(self, clean=True):
@@ -313,22 +281,13 @@ class VPFit:
         return self.absorptions
     
 
-    def optimizedMethod(self, wavelength=None, flux=None, error=None, N=5):
+    def optimizedMethod(self, wavelength=None, flux=None, error=None, beg_ind=None,N=5):
             
             resolution=self.fwhm
             
             if wavelength is None:
 
                 default_mode=True
-
-                '''
-                #mask = (self.wavelength > (1215.67 * (1 + self.emitter_redshift))) & (self.wavelength < 6800)
-
-                #valid_indices = np.where(mask)[0]
-                
-                wavelength = self.wavelength[mask]
-                flux = self.flux[mask]
-                error = self.error[mask]'''
 
                 wavelength=self.wavelength
                 flux=self.flux
@@ -337,6 +296,7 @@ class VPFit:
 
             else:
                 default_mode=False
+
 
             isf = gaussian_isf(resolution)
             num_pixels = len(flux)
@@ -365,8 +325,9 @@ class VPFit:
             detected = significance <= -N
 
             # Pad the detected array with False values to match the original spectrum length
-            padding_length = len(self.wavelength) - len(detected)
-            detected = np.pad(detected, (padding_length, 0), constant_values=False)
+            padding_length = len(wavelength) - len(detected)
+            detected = np.pad(detected, (0, padding_length), constant_values=False)
+
 
             #list of micro absorption lines
             micro_absorption_lines=[]
@@ -384,9 +345,16 @@ class VPFit:
 
                         end_index=i
 
-                        if (self.wavelength[i] > (1215.67 * (1 + self.emitter_redshift))):
+                        if default_mode:
 
-                            micro_absorption_lines.append(MicroAbsorptionLine(self.wavelength[start_index:end_index],self.flux[start_index:end_index],self.error[start_index:end_index],start_index,end_index))
+                            if (wavelength[i] > (1215.67 * (1 + self.emitter_redshift))) and (self.wavelength[i] <= 6800):
+
+                                micro_absorption_lines.append(MicroAbsorptionLine(self.wavelength[start_index-1:end_index+1],self.flux[start_index-1:end_index+1],self.error[start_index-1:end_index+1],start_index-1,end_index+1))
+
+                        else:
+                            start_index+=beg_ind
+                            end_index+=beg_ind
+                            micro_absorption_lines.append(MicroAbsorptionLine(self.wavelength[start_index-1:end_index+1],self.flux[start_index-1:end_index+1],self.error[start_index-1:end_index+1],start_index-1,end_index+1))
 
                         start_index=None
             
@@ -396,7 +364,7 @@ class VPFit:
             #    if microline.number_of_zeros_error<=3:
             #        self.micro_absorption_lines.pop(i)
 
-            print(f"Found {len(micro_absorption_lines)} microlines")
+            #print(f"Found {len(micro_absorption_lines)} microlines")
 
             if default_mode==False:
                 return micro_absorption_lines
@@ -485,6 +453,160 @@ class VPFit:
             plt.savefig('Optimized_test.png')
             '''
 
+    def churchill_style_absorbers(self, velocity_window=800):
+        trans = [
+            {"name": "MgII_2796", "lambda": 2796.354, "f": 0.6123, "N_sigma": 5},
+            {"name": "MgII_2803", "lambda": 2803.531, "f": 0.3054, "N_sigma": 3},
+            {"name": "FeII_2600", "lambda": 2600.173, "f": 0.2239, "N_sigma": 3},
+            {"name": "MgI_2852",  "lambda": 2852.964, "f": 1.83,   "N_sigma": 3},
+        ]
+
+        def gaussian_isf(fwhm, size=9):
+            sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
+            x = np.arange(-size, size + 1)
+            return np.exp(-0.5 * (x / sigma)**2)
+
+        def compute_ews(wavelength, flux, error, isf):
+            ew = np.zeros_like(flux)
+            sigma_w = np.zeros_like(error)
+            hw = len(isf) // 2
+            for i in range(hw, len(flux) - hw):
+                window_flux = flux[i-hw:i+hw+1]
+                window_wave = wavelength[i-hw:i+hw+1]
+                d_lambda = np.diff(window_wave)
+                if len(d_lambda) == len(window_flux) - 1:
+                    Dn = 1 - window_flux[:-1]
+                    ew[i] = -np.sum((isf[:-1]**2) * Dn * d_lambda)
+                    sigma_w[i] = np.sqrt(np.sum((error[i-hw:i+hw][:len(d_lambda)] * isf[:-1] * d_lambda)**2))
+            return ew, sigma_w
+
+        isf = gaussian_isf(self.fwhm)
+        ew, sigma_w = compute_ews(self.wavelength, self.flux, self.error, isf)
+
+        detected_indices = []
+        for i, lam_obs in enumerate(self.wavelength):
+            z = lam_obs / trans[0]["lambda"] - 1
+            if i >= len(ew):
+                continue
+            if ew[i] < -trans[0]["N_sigma"] * sigma_w[i]:
+                richness = 0
+                for t in trans[2:]:
+                    lam_t = t["lambda"] * (1 + z)
+                    k = np.argmin(np.abs(self.wavelength - lam_t))
+                    if k < len(ew) and ew[k] < -t["N_sigma"] * sigma_w[k]:
+                        richness += 1
+                if richness >= 1:
+                    detected_indices.append(i)
+
+        detected_indices.sort()
+
+        # Group detections into systems
+        systems = []
+        current = []
+        for i in detected_indices:
+            z_i = self.wavelength[i] / trans[0]["lambda"] - 1
+            if not current:
+                current.append(i)
+            else:
+                last_z = self.wavelength[current[-1]] / trans[0]["lambda"] - 1
+                delta_v = c_kms * (z_i - last_z) / (1 + last_z)
+                if delta_v <= velocity_window:
+                    current.append(i)
+                else:
+                    systems.append(current)
+                    current = [i]
+        if current:
+            systems.append(current)
+
+        absorption_systems = []
+        for group in systems:
+            i = group[0]
+            z = self.wavelength[i] / trans[0]["lambda"] - 1
+            lam_min = trans[0]["lambda"] * (1 + z) - 2
+            lam_max = trans[0]["lambda"] * (1 + z) + 2
+            i_range = np.where((self.wavelength >= lam_min) & (self.wavelength <= lam_max))[0]
+            if len(i_range) > 0:
+                #perhaps add the absorptionlinesystems by finding the microlines from the optimized method
+                microlines=self.optimizedMethod(self.wavelength[i_range[0]:i_range[-1]],self.flux[i_range[0]:i_range[-1]],self.error[i_range[0]:i_range[-1]],i_range[0],N=1)
+                print(microlines)
+                absorption_systems.append(AbsorptionLineSystem(self, microlines))
+
+        pairs=[]
+        for line in absorption_systems:
+
+            z_low,z_high=((line.wavelength[0]-2796.354)/2796.354),((line.wavelength[-1]-2796.354)/2796.354)
+
+            start_ind = np.argmin(np.abs(self.wavelength - ((z_low+1)*2803.531)))
+            stop_ind = np.argmin(np.abs(self.wavelength - ((z_high+1)*2803.531)))
+
+            microlines=self.optimizedMethod(self.wavelength[start_ind:stop_ind],self.flux[start_ind:stop_ind],self.error[start_ind:stop_ind],start_ind,N=1)
+            if len(microlines)>0:
+                pairs.append((line,AbsorptionLineSystem(self, microlines)))
+
+
+        validated_systems=[]
+        for pair in pairs:
+
+            system_2796=pair[0]
+            system_2803=pair[1]
+
+            # Redshift check
+            z_2796 = (system_2796.peak - trans[0]["lambda"]) / trans[0]["lambda"]
+            z_2803 = (system_2803.peak - trans[1]["lambda"]) / trans[1]["lambda"]
+            if abs(z_2796 - z_2803) > 0.01:
+                continue
+
+            # Microline count check
+            if abs(len(system_2796.microLines) - len(system_2803.microLines)) > 2:
+                continue
+
+            # Microline alignment check
+            successes = 0
+            for m1 in system_2796.microLines:
+                for m2 in system_2803.microLines:
+                    z1 = (m1.peak - trans[0]["lambda"]) / trans[0]["lambda"]
+                    z2 = (m2.peak - trans[1]["lambda"]) / trans[1]["lambda"]
+                    if abs(z1 - z2) < 0.001:
+                        successes += 1
+                        break
+            if len(system_2796.microLines) == 0 or successes / len(system_2796.microLines) < 0.8:
+                continue
+
+            validated_systems.append((system_2796,system_2803))
+
+
+        filtered_rows = self.atomDB[self.atomDB['Transition'] == 'MgII']
+        MgII_doublet=tuple(filtered_rows['Wavelength'])
+        MgII_stregnths=tuple(filtered_rows['Strength'])
+
+        print('churchill')
+        for i in validated_systems:
+            i[0].z=(i[0].peak-trans[0]["lambda"])/trans[0]["lambda"]
+            i[0].z_err=.1
+
+            i[0].suspected_line=MgII_doublet[0]
+            i[0].name=f"MgII {MgII_doublet[0]}"
+            i[0].update_line_attributes()
+
+            i[1].z=i[0].z
+            i[1].z_err=.1
+
+            i[1].suspected_line=MgII_doublet[1]
+            i[1].name=f"MgII {MgII_doublet[1]}"
+            i[1].update_line_attributes()
+
+            print(i[0].wavelength[0],i[0].wavelength[-1])
+            print(i[1].wavelength[0],i[1].wavelength[-1])
+
+        #fill absorbers list
+        '''self.absorbers=[]
+
+        for i,pair in enumerate(validated_systems):
+
+            self.absorbers.append(Absorber(pair[0].z,pair[0].z_err,pair))
+
+        return self.absorbers'''
+
 
     def Nearest(self, wavelength, tol=1., whole=False):
         # Determine which list of absorption lines to use
@@ -537,7 +659,9 @@ class VPFit:
         final_start_ind = start_ind + left
         final_stop_ind = start_ind + right + 1  # +1 to include the last point
 
-        guess_line = AbsorptionLineSystem(self,(final_start_ind,final_stop_ind))
+        guess_line = AbsorptionLineSystem(self,(start_ind,stop_ind))
+
+        #guess_line = AbsorptionLineSystem(self,(final_start_ind,final_stop_ind))
 
         #____________________________________________________________________________________________________
         #check around to see if its MgII 2796 or 2803
@@ -739,6 +863,16 @@ class VPFit:
         """Calculate the error based on spectral resolution."""
         return wavelength / resolution
     
+    def upgraded_MgII_search(self):
+
+        filtered_rows = self.atomDB[self.atomDB['Transition'] == 'MgII']
+        MgII_doublet=tuple(filtered_rows['Wavelength'])
+        MgII_stregnths=tuple(filtered_rows['Strength'])
+        EW_ratio=MgII_stregnths[0]/MgII_stregnths[1]
+
+        potential_doublets=[]
+
+    
     def MgII_search(self):
 
         filtered_rows = self.atomDB[self.atomDB['Transition'] == 'MgII']
@@ -774,7 +908,7 @@ class VPFit:
             z_1=(pair[0].peak-MgII_doublet[0])/MgII_doublet[0]
             z_2=(pair[1].peak-MgII_doublet[1])/MgII_doublet[1]
 
-            if math.isclose(z_1,z_2,abs_tol=.05):
+            if math.isclose(z_1,z_2,abs_tol=.01):
 
                 final_suspected_z = (z_1+z_2)/2
 
@@ -845,19 +979,46 @@ class VPFit:
                 pair[1].z_err=z_error'''
 
         record_pair_csv(z_check,"z_check",actual=True)
-
-        #width check
-        width_check=[]
+        
+        
+        #microline check
+        #check just number of microlines
+        microline_check=[]
         for i, pair in enumerate(z_check):
-            if math.isclose(len(pair[0].wavelength),len(pair[1].wavelength),abs_tol=10):
+            if math.isclose(len(pair[0].microLines),len(pair[1].microLines),abs_tol=2):
+                microline_check.append(pair)
 
-                width_check.append(pair)
+        record_pair_csv(microline_check,"microline_check")
 
-        record_pair_csv(width_check,"width_check")
+        #
+        #see if the lines line up
+        microline_line_check=[]
+        for i, pair in enumerate(microline_check):
+
+            pair0_microlines=[]
+            for microline in pair[0].microLines:
+                pair0_microlines.append((microline.peak-2796)/2796)
+
+            pair1_microlines=[]
+            for microline in pair[1].microLines:
+                pair1_microlines.append((microline.peak-2803)/2803)
+
+            success=[]
+            for j,micro in enumerate(pair0_microlines):
+                for k,micro2 in enumerate(pair1_microlines):
+                    if math.isclose(micro,micro2,abs_tol=.001):
+                        success.append(1)
+
+
+            if (np.sum(np.array(success))/len(pair0_microlines))>=.8:
+                microline_line_check.append(pair)
+
+        record_pair_csv(microline_line_check,"microline_line_check")
+
 
         #go through the surviving pairs and calc EW and N
 
-        for pair in width_check:
+        for pair in microline_line_check:
 
             pair[0].find_N()
             pair[0].equivalent_width()
@@ -870,8 +1031,12 @@ class VPFit:
         
         #ew check
         ew_check=[]
-        for i, pair in enumerate(width_check):
-            if (1.1<=pair[0].ew/pair[1].ew<=2):
+        target_ratio = EW_ratio
+        for i, pair in enumerate(microline_line_check):
+            target_ratio = EW_ratio
+            if abs((pair[0].ew / pair[1].ew) - target_ratio) < 1.0:
+
+            #if (1.5<=pair[0].ew/pair[1].ew<=2):
                 
                 ew_check.append(pair)
 
@@ -912,6 +1077,13 @@ class VPFit:
 
         lines_to_check = self.atomDB["Wavelength"].to_numpy()
         elements_to_check = self.atomDB['Transition'].to_numpy()
+
+        # Create a boolean mask where elements are NOT 'MgII'
+        mask = elements_to_check != 'MgII'
+
+        # Apply the mask to filter both arrays
+        elements_to_check = elements_to_check[mask]
+        lines_to_check = lines_to_check[mask]
 
         for i,absorber in enumerate(absorber_list):
 
@@ -1376,6 +1548,8 @@ class VPFit:
 
         #self.ApertureMethod()
         self.optimizedMethod(N=2)
+
+        self.churchill_style_absorbers()
 
         self.MgII_search()
 

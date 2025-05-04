@@ -71,24 +71,56 @@
     }
     
     function anchorParam(i, j) {
-        const select = document.getElementById(`anchor_select_${i}_${j}`);
+    const select = document.getElementById(`anchor_select_${i}_${j}`);
+    if (select) {
         select.style.display = (select.style.display === 'none') ? 'block' : 'none';
+        }
+    }
+
+    
+    function thermalParam(i, j) {
+        const select = document.getElementById(`thermal_select_${i}_${j}`);
+        if (select) {
+            select.style.display = (select.style.display === 'none') ? 'block' : 'none';
+        }
+    }
+
+    function non_thermalParam(i, j) {
+        const statusInput = document.getElementById(`status_${i}_${j}`);
+        const cell = document.getElementById(`cell_${i}_${j}`);
+        statusInput.value = 'non-thermal';
+        cell.style.backgroundColor = '#ffffcc';  // light yellow
     }
     
     function setAnchor(i, j, selectElement) {
         const value = selectElement.value;
         const statusInput = document.getElementById(`status_${i}_${j}`);
         const cell = document.getElementById(`cell_${i}_${j}`);
-        
+
         if (value) {
             statusInput.value = `anchor_to:${value}`;
-            cell.style.backgroundColor = '#ddf';  // light blue for anchor
+            cell.style.backgroundColor = '#ddf';  // light blue
+        } else {
+            statusInput.value = 'free';
+            cell.style.backgroundColor = '';
+        }
+    }
+
+    function setThermalParam(i, j, selectElement) {
+        const value = selectElement.value;
+        const statusInput = document.getElementById(`status_${i}_${j}`);
+        const cell = document.getElementById(`cell_${i}_${j}`);
+
+        if (value) {
+            statusInput.value = `thermal:${value}`;
+            cell.style.backgroundColor = '#ccffcc';  // light green
         } else {
             statusInput.value = 'free';
             cell.style.backgroundColor = '';
         }
     }
 </script>
+
 
 <body>
 
@@ -117,24 +149,61 @@
                                 {% for value in row %}
                                     {% set j = loop.index0 %}
                                     <td id="cell_{{ i }}_{{ j }}">
+
+                                        
                                         <script>
                                             const status = "{{ statuses[i][j] }}";
                                             const cell = document.getElementById("cell_{{ i }}_{{ j }}");
+                                        
                                             if (status === "fixed") {
                                                 cell.style.backgroundColor = "#ffdddd";
                                             } else if (status.startsWith("anchor_to:")) {
                                                 cell.style.backgroundColor = "#ddf";
-                                                document.getElementById("anchor_select_{{ i }}_{{ j }}").value = status.split(":")[1];
-                                                document.getElementById("anchor_select_{{ i }}_{{ j }}").style.display = "block";
+                                                const comp = status.split(":")[1];
+                                                const anchorSelect = document.getElementById("anchor_select_{{ i }}_{{ j }}");
+                                                if (anchorSelect) {
+                                                    anchorSelect.value = comp;
+                                                    anchorSelect.style.display = "block";
+                                                }
+                                            } else if (status === "non-thermal") {
+                                                cell.style.backgroundColor = "#ffffcc";
+                                            } else if (status.startsWith("thermal:")) {
+                                                cell.style.backgroundColor = "#ccffcc";
+                                                const element = status.split(":")[1];
+                                                const thermalSelect = document.getElementById("thermal_select_{{ i }}_{{ j }}");
+                                                if (thermalSelect) {
+                                                    thermalSelect.value = element;
+                                                    thermalSelect.style.display = "block";
+                                                }
                                             }
                                         </script>
+                                        
                                         
                                         <input type="text" name="param_{{ i }}_{{ j }}" value="{{ value }}">
                                         <input type="hidden" name="status_{{ i }}_{{ j }}" id="status_{{ i }}_{{ j }}" value="{{ statuses[i][j] }}">
                                         
                                         <div class="button-container">
+                                            {% if j==0 %}
+                                            <button type="button" class="small-btn" onclick="fixParam({{ i }}, {{ j }})">Fix</button>
+                                            {% endif %}
+
+                                            {% if 'b' in column_names[j] %}
+                                                <button type="button" class="small-btn" onclick="thermalParam({{ i }}, {{ j }})">Thermal</button>
+                                                <button type="button" class="small-btn" onclick="non_thermalParam({{ i }}, {{ j }})">Non-Therm</button>
+
+                                                <select onchange="setThermalParam({{ i }}, {{ j }}, this)" style="display:none" id="thermal_select_{{ i }}_{{ j }}">
+                                                    <option value="">--Select Element--</option>
+                                                    {% for element in elements %}
+                                                        <option value="{{ element }}">{{ element }}</option>
+                                                    {% endfor %}
+                                                </select>
+                                            {% endif %}
+
+
+                                            {% if 'LogN' in column_names[j]%}
                                             <button type="button" class="small-btn" onclick="fixParam({{ i }}, {{ j }})">Fix</button>
                                             <button type="button" class="small-btn" onclick="anchorParam({{ i }}, {{ j }})">Anchor</button>
+                                            {% endif %}
                                         </div>
                         
                                         <select onchange="setAnchor({{ i }}, {{ j }}, this)" style="display:none" id="anchor_select_{{ i }}_{{ j }}">
@@ -143,6 +212,7 @@
                                                 <option value="{{ m }}">Component {{ m }}</option>
                                             {% endfor %}
                                         </select>
+
                                     </td>
                                 {% endfor %}
                             </tr>
@@ -151,6 +221,20 @@
                 </table>
                 <br>
                 <input type="submit" value="Update">
+            </form>
+
+            <form action="/add_component" method="post" style="display: inline;">
+                <button type="submit">➕ Add Component</button>
+            </form>
+            
+            <form action="/delete_component" method="post" style="display: inline;">
+                <label for="component_index">Delete Component:</label>
+                <select name="component_index" id="component_index">
+                    {% for i in range(parameters|length) %}
+                        <option value="{{ i }}">Component {{ i }}</option>
+                    {% endfor %}
+                </select>
+                <button type="submit">❌ Delete</button>
             </form>
 
             <form action="{{ url_for('actual_mcmc') }}" method="post">

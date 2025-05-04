@@ -1,11 +1,8 @@
-import emcee
 import numpy as np
 from scipy.special import wofz
-from scipy.signal import find_peaks
 import matplotlib.pyplot as plt
 import pandas as pd
 from scipy.interpolate import interp1d
-from scipy.ndimage import gaussian_filter
 from scipy.signal import convolve
 
 from essential_functions import read_parameter
@@ -87,6 +84,14 @@ class mcmc_line:
 
         return params
     
+
+def read_atomic_mass(element):
+    masses = {
+        'H': 1.0079, 'He': 4.0026, 'C': 12.011, 'N': 14.007, 'O': 15.999,
+        'Mg': 24.305, 'Si': 28.085, 'Fe': 55.845, 'Zn': 65.38
+    }
+    return masses.get(element, 28.0)
+    
 def velocity_to_redshift(velocity):
     # Converts velocity to redshift
     c = 299792.458  # Speed of light in km/s
@@ -101,6 +106,8 @@ def parse_statuses(statuses, initial_guesses):
     free_indices = []
     fixed_values = {}
     anchor_map = {}
+    thermal_map = {}   # NEW
+    nonthermal_set = set()  # NEW
 
     num_rows = len(statuses)
     num_cols = len(statuses[0])
@@ -113,19 +120,23 @@ def parse_statuses(statuses, initial_guesses):
             elif status == 'fixed':
                 fixed_values[(i, j)] = initial_guesses[i][j]
             elif status.startswith('anchor_to:'):
-                target = status.split(':')[1]
-                if '_' in target:
-                    ti, tj = map(int, target.split('_'))
-                else:
-                    ti = int(target)
-                    tj = j  # anchor to the same parameter index
-                anchor_map[(i, j)] = (ti, tj)
+                target = int(status.split(':')[1])
+                anchor_map[(i, j)] = (target, j)
+            elif status.startswith('thermal:'):
+                element = status.split(':')[1]
+                thermal_map[(i, j)] = element
+            elif status == 'non-thermal':
+                nonthermal_set.add((i, j))
             else:
                 raise ValueError(f"Unknown status {status} at ({i},{j})")
-    
-    return free_indices, fixed_values, anchor_map
 
-def rebuild_full_params(free_values, free_indices, fixed_values, anchor_map, shape):
+    # Exclude thermal/non-thermal from sampling
+    free_indices = [idx for idx in free_indices if idx not in thermal_map and idx not in nonthermal_set]
+
+    return free_indices, fixed_values, anchor_map, thermal_map, nonthermal_set
+
+def rebuild_full_params(free_values, free_indices, fixed_values, anchor_map, shape,
+                        thermal_map=None, nonthermal_set=None, elements=None):
     full_params = np.zeros(shape)
 
     for (i, j), val in fixed_values.items():
@@ -137,7 +148,35 @@ def rebuild_full_params(free_values, free_indices, fixed_values, anchor_map, sha
     for (i, j), (ti, tj) in anchor_map.items():
         full_params[i, j] = full_params[ti, tj]
 
+    if thermal_map:
+        for (i, j), element in thermal_map.items():
+            ref_index = elements.index(element)
+            target_index = (j - 1) // 2
+            ref_mass = read_atomic_mass(element[0:2])
+            target_mass = read_atomic_mass(elements[target_index][0:2])
+            ref_b_idx = 1 + ref_index * 2 + 1
+            ref_b = full_params[i, ref_b_idx]
+            full_params[i, j] = ref_b / np.sqrt(target_mass / ref_mass)
+
+    if nonthermal_set:
+        for i in range(shape[0]):
+            # Get all b-indices for this component
+            b_indices = [j for (ii, j) in nonthermal_set if ii == i]
+            if b_indices:
+                try:
+                    mgii_idx = elements.index("MgII")
+                    mgii_b_col = 1 + 2 * mgii_idx + 1  # velocity + 2*logN/b per element + b offset
+                    mgii_b_val = full_params[i, mgii_b_col]
+                except ValueError:
+                    print(f"[WARNING] MgII not found in elements list. Defaulting to first non-thermal b.")
+                    mgii_b_val = full_params[i, b_indices[0]]  # fallback if MgII not present
+
+                for j in b_indices:
+                    full_params[i, j] = mgii_b_val
+
+
     return full_params.flatten()
+
 
 
 
@@ -281,7 +320,52 @@ def convolve_flux(wave,flux):
 
 import pandas as pd
 
-def summarize_params(flat_samples, labels, elements, mcmc_lines,file_name):
+def summarize_params(flat_samples, labels, elements, mcmc_lines, file_name):
+    summary = []
+    params_per_microline = (2 * len(elements)) + 1
+
+    reference_line_ind = 0
+    ref_param_block = flat_samples[:, reference_line_ind * params_per_microline:(reference_line_ind + 1) * params_per_microline]
+    ref_vel_p16, ref_vel_p50, ref_vel_p84 = np.percentile(ref_param_block[:, 0], [16, 50, 84])
+
+    for i, mcmc_line_obj in enumerate(mcmc_lines):
+        param_block = flat_samples[:, i * params_per_microline:(i + 1) * params_per_microline]
+
+        # Velocity
+        vel_samples = param_block[:, 0]
+        vel_p16, vel_p50, vel_p84 = np.percentile(vel_samples, [16, 50, 84])
+        rel_median = vel_p50 - ref_vel_p50
+        rel_low = vel_p50 - vel_p16
+        rel_high = vel_p84 - vel_p50
+
+        for j, element in enumerate(elements):
+            # logN
+            logN_samples = param_block[:, (j * 2) + 1]
+            logN_p16, logN_p50, logN_p84 = np.percentile(logN_samples, [16, 50, 84])
+            logN_low = logN_p50 - logN_p16
+            logN_high = logN_p84 - logN_p50
+
+            # b
+            b_samples = param_block[:, (j * 2) + 2]
+            b_p16, b_p50, b_p84 = np.percentile(b_samples, [16, 50, 84])
+            b_low = b_p50 - b_p16
+            b_high = b_p84 - b_p50
+
+            summary.append({
+                'Component': i + 1,
+                'Species': f"{element}",
+                f'dv_c (km/s)': f"{rel_median:.1f} (+{rel_high:.2f}/-{rel_low:.2f})",
+                f'log N': f"{logN_p50:.2f} (+{logN_high:.2f}/-{logN_low:.2f}) ; ifsat ({np.percentile(logN_samples, 5):.2f})",
+                f'b (km/s)': f"{b_p50:.1f} (+{b_high:.1f}/-{b_low:.1f}) ; ifsat ({np.percentile(b_samples, 95):.1f})"
+            })
+
+    df = pd.DataFrame(summary)
+    df.to_csv(f"static/Data/multi_mcmc/{file_name}.csv", index=False)
+    return df
+
+
+
+'''def summarize_params(flat_samples, labels, elements, mcmc_lines,file_name):
     summary = []
 
     params_per_microline = (2 * len(elements)) + 1
@@ -298,10 +382,6 @@ def summarize_params(flat_samples, labels, elements, mcmc_lines,file_name):
 
 
     for i, mcmc_line_obj in enumerate(mcmc_lines):
-
-        '''for microline in mcmc_line_obj.microlines:
-            if microline.is_saturated:
-                pass'''
 
         #actual data
         param_block = flat_samples[:, i*params_per_microline:(i+1)*params_per_microline]
@@ -321,41 +401,19 @@ def summarize_params(flat_samples, labels, elements, mcmc_lines,file_name):
             logN_samples = param_block[:, (j*2)+1]
             b_samples = param_block[:, (j*2)+2]
 
-            try:
-                print('saturation check')
-                saturated = any(line.is_saturated for line in mcmc_line_obj.line_dict.get(e))
-            except:
-                saturated = False
+            logN_median = np.median(logN_samples)
+            logN_low, logN_high = np.percentile(logN_samples, [16, 84])
+            b_median = np.median(b_samples)
+            b_low, b_high = np.percentile(b_samples, [16, 84])
 
-            if saturated:
-                print('got a saturation')
-                logN_low = np.percentile(logN_samples, 5)
-                b_high = np.percentile(b_samples, 95)
-                logN_median = np.median(logN_samples)
-                b_median = np.median(b_samples)
-
-                summary.append({
+            summary.append({
                 'Component': i+1,
-                'Species': f"{element} saturated",
+                'Species': f"{element}",
                 f'dv_c (km/s)': f"{rel_median:.1f} (+{rel_high - rel_median:.2f}/-{rel_median - rel_low:.2f})",
-                f'log N': f"{logN_median:.2f} (+{logN_high - logN_median:.2f}/-{logN_median - logN_low:.2f})",
-                f'b (km/s)': f"{b_median:.1f} (+{b_high - b_median:.1f}/-{b_median - b_low:.1f})"
-                })
-
-            else:
-                logN_median = np.median(logN_samples)
-                logN_low, logN_high = np.percentile(logN_samples, [16, 84])
-                b_median = np.median(b_samples)
-                b_low, b_high = np.percentile(b_samples, [16, 84])
-
-                summary.append({
-                    'Component': i+1,
-                    'Species': f"{element}",
-                    f'dv_c (km/s)': f"{rel_median:.1f} (+{rel_high - rel_median:.2f}/-{rel_median - rel_low:.2f})",
-                    f'log N': f"{logN_median:.2f} (+{logN_high - logN_median:.2f}/-{logN_median - logN_low:.2f})",
-                    f'b (km/s)': f"{b_median:.1f} (+{b_high - b_median:.1f}/-{b_median - b_low:.1f})"
-                })
+                f'log N': f"{logN_median:.2f} (+{logN_high - logN_median:.2f}/-{logN_median - logN_low:.2f}) ; ifsat ({np.percentile(logN_samples, 5)})",
+                f'b (km/s)': f"{b_median:.1f} (+{b_high - b_median:.1f}/-{b_median - b_low:.1f}) ; ifsat ({np.percentile(b_samples, 95)})"
+            })
 
     df = pd.DataFrame(summary)
     df.to_csv(f"static/Data/multi_mcmc/{file_name}.csv",index=False)
-    return df
+    return df'''

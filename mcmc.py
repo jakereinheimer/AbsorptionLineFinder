@@ -70,13 +70,13 @@ def plot_fits(params, line_dict, elements, mcmc_lines,file_name):
     import smplotlib
 
     c = 3e5
-    vel_window=200
+    vel_window=400
 
     num_params_per_line = 1 + 2 * len(elements)
     param_list_2d = np.array(params).reshape(-1, num_params_per_line)
 
 
-    models=total_multi_model(params,line_dict,elements,mcmc_lines,high_resolution=True)
+    models=total_multi_model(params,line_dict,elements,mcmc_lines,high_resolution=True,extra=True)
     standard_models=total_multi_model(params,line_dict,elements,mcmc_lines)
 
     '''
@@ -101,6 +101,8 @@ def plot_fits(params, line_dict, elements, mcmc_lines,file_name):
     fig, axs = plt.subplots(len(line_dict.values()), 1, figsize=(10, 3 * len(line_dict.values())), squeeze=False,sharex=True,sharey=True)
     axs_flat = axs.ravel()
 
+    fig.text(0.04, 0.5, 'Normalized Flux', va='center', rotation='vertical', fontsize=20)
+
     for i, name in enumerate(line_dict.keys()):
 
         line=line_dict.get(name)
@@ -113,26 +115,42 @@ def plot_fits(params, line_dict, elements, mcmc_lines,file_name):
         obs_flux = line.MgII_flux
         model_flux = standard_models[name]
         errors = np.sqrt(line.MgII_errors)
+        #errors= line.MgII_errors
+        #errors= np.sqrt(1/line.MgII_errors)
 
         # Calculate chi-squared and reduced chi-squared
         chi_squared = np.sum(((obs_flux - model_flux) / errors) ** 2)
         degrees_of_freedom = len(obs_flux) - (len(mcmc_lines)*3)
         reduced_chi_squared = chi_squared / degrees_of_freedom if degrees_of_freedom != 0 else 0
 
-        ax.text(vel_window-60, 0.3, f"$\chi^2_{{red}}={reduced_chi_squared:.2f}$")
+        ax.text(vel_window-120, 0.3, f"$\chi^2_{{red}}={reduced_chi_squared:.2f}$")
 
         #actual plot
         reference_microline=(reference_z+1)*line.suspected_line
 
-        full_velocity = (line.extra_wavelength - reference_microline) / reference_microline * c
-        velocity =  (line.MgII_wavelength - reference_microline) / reference_microline * c
+        full_velocity = (line.extra_wavelength - reference_microline) / reference_microline * c 
+        velocity =  (line.MgII_wavelength - reference_microline) / reference_microline * c 
+
+        '''
+        full_velocity=[]
+        for wave in line.extra_wavelength:
+            full_velocity.append(redshift_to_velocity((wave-reference_microline) /reference_microline))
+        full_velocity=np.array(full_velocity)
+
+        velocity=[]
+        for wave in line.MgII_wavelength:
+            velocity.append(redshift_to_velocity((wave-reference_microline) /reference_microline))
+        velocity=np.array(velocity)'''
         
         ax.step(full_velocity, line.extra_flux, where='mid', label=f"Flux", color="black")
         ax.step(full_velocity, line.extra_errors, where='mid', label="Error", color="cyan")
 
         ax.step(velocity,standard_models.get(name), where='mid', label=f"Model", color="purple")
 
-        ax.step(np.linspace(velocity[0],velocity[-1],len(velocity)*10), models.get(name), where='mid', label=f"Model", color="red")
+        high_res_full_velocity=np.linspace(full_velocity[0],full_velocity[-1],len(full_velocity)*10)
+
+        ax.step(high_res_full_velocity, models.get(name), where='mid', label=f"Model", color="red")
+
 
         for i,line_params in enumerate(param_list_2d):
 
@@ -142,20 +160,11 @@ def plot_fits(params, line_dict, elements, mcmc_lines,file_name):
 
             ax.vlines(velocity, ymin=1.2,ymax=1.3,color='blue')
         
-        '''
-        for microline in line.mcmc_microlines:
-            microline_vel=(microline.wavelength - reference_microline) / reference_microline * c
-            #ax.axvspan(microline_vel[0], microline_vel[-1], color='grey', alpha=0.3)
-            ax.vlines(microline_vel[np.argmin(microline.flux)], ymin=1.2,ymax=1.3)'''
-        
-        ax.text(vel_window-60,0.1,f'{name.split(" ")[0]} {int(np.floor(float(name.split(" ")[1])))}')
+        ax.text(vel_window-120,0.1,f'{name.split(" ")[0]} {int(np.floor(float(name.split(" ")[1])))}')
         ax.set_xlim(-vel_window, vel_window)
 
     # Label axes and configure layout
     axs_flat[-1].set_xlabel('Relative Velocity (km/s)', fontsize=12)
-
-    for ax in axs[:, 0]:  # Set y-label for the first column
-        ax.set_ylabel('Flux', fontsize=12)
 
     plt.subplots_adjust(hspace=0)
 
@@ -206,7 +215,7 @@ def log_probability(params, lines, AtomDB, element):
         return -np.inf
     return lp + log_likelihood(params, lines, AtomDB, element)
 
-def total_multi_model(params, line_dict, elements, mcmc_lines, convolve_data=True,high_resolution=False,chi2=False):
+def total_multi_model(params, line_dict, elements, mcmc_lines, convolve_data=True,high_resolution=False,chi2=False,extra=False):
 
     params_per_microline=(2*len(elements))+1
     param_list_2d = np.array(params).reshape(-1, params_per_microline)
@@ -219,7 +228,10 @@ def total_multi_model(params, line_dict, elements, mcmc_lines, convolve_data=Tru
     for key,line in line_dict.items():
 
         if high_resolution:
-            wavelength=np.linspace(line.MgII_wavelength[0],line.MgII_wavelength[-1],len(line.MgII_wavelength)*10)
+            if extra:
+                wavelength=np.linspace(line.extra_wavelength[0],line.extra_wavelength[-1],len(line.extra_wavelength)*10)
+            else:
+                wavelength=np.linspace(line.MgII_wavelength[0],line.MgII_wavelength[-1],len(line.MgII_wavelength)*10)
 
         else:
             wavelength=line.MgII_wavelength
@@ -266,6 +278,10 @@ def log_multi_likelihood(params, lines, elements, mcmc_lines):
         model=models.get(key)
         #chi2 += np.sum(-0.5 * ((line.MgII_flux - model) / line.MgII_errors) ** 2)
         chi2 += np.sum(np.log(1/np.sqrt(2*np.pi)/line.MgII_errors) + -(line.MgII_flux - model)**2/2/line.MgII_errors**2)
+        #chi2 += np.sum(-0.5 * (line.MgII_flux - model)**2 * line.MgII_errors)
+        #chi2 += np.sum(-0.5 * np.log(2 * np.pi) + 0.5 * np.log(line.MgII_errors) - 0.5 * (line.MgII_flux - model)**2 * line.MgII_errors)
+
+
 
     return chi2
 
@@ -289,15 +305,18 @@ def log_multi_prior(params,elements,mcmc_lines):
             
     return 0.0
 
-def log_multi_probability(free_values, line_dict, elements, mcmc_lines, free_indices, fixed_values, anchor_map, shape):
-    params = rebuild_full_params(free_values, free_indices, fixed_values, anchor_map, shape)
-    #lines=line_dict.values()
-    lp = log_multi_prior(params,elements,mcmc_lines)
+def log_multi_probability(free_values, line_dict, elements, mcmc_lines,
+                          free_indices, fixed_values, anchor_map, shape,
+                          thermal_map=None, nonthermal_set=None):
+    params = rebuild_full_params(free_values, free_indices, fixed_values, anchor_map,
+                                 shape, thermal_map, nonthermal_set, elements)
+
+    lp = log_multi_prior(params, elements, mcmc_lines)
     if not np.isfinite(lp):
         return -np.inf
-    return lp + log_multi_likelihood(params, line_dict, elements, mcmc_lines)
+    return lp + log_multi_likelihood(params, line_dict, elements, mcmc_lines) * 10
 
-def pre_mcmc(absorber,elements,nsteps=1000,nwalkers=250):
+def pre_mcmc(absorber,elements):
 
     if isinstance(absorber, dict):
         line_dict=absorber
@@ -373,6 +392,8 @@ def pre_mcmc(absorber,elements,nsteps=1000,nwalkers=250):
     param_list = [line.export_params() for line in mcmc_lines]
     initial_guesses_2d=np.array(param_list)
 
+    
+
 
     for i,microline in enumerate(strong_line.mcmc_microlines):
 
@@ -391,9 +412,6 @@ def pre_mcmc(absorber,elements,nsteps=1000,nwalkers=250):
     #plot all initial guesses
 
     plot_fits(initial_guesses,line_dict,elements,mcmc_lines,'initial/initial_guesses')
-
-    for line in line_dict.values():
-        line.plotly_plot()
 
 
     #save all the objects
@@ -435,23 +453,44 @@ def mcmc(initial_guesses,statuses, nsteps=1000,nwalkers=250):
     shape = initial_guesses.shape
 
     # Parse statuses
-    free_indices, fixed_values, anchor_map = parse_statuses(statuses, initial_guesses)
+    free_indices, fixed_values, anchor_map, thermal_map, nonthermal_set = parse_statuses(statuses, initial_guesses)
     initial_free_values = [initial_guesses[i][j] for (i, j) in free_indices]
-    
+
+    print('initial free values')
+    print(initial_free_values)
+
+    ndim = len(initial_free_values)
+
+    '''
     ndim = len(initial_free_values)
     percent_off = 0.0001
     # Generate the position array
     #pos = initial_guesses + (percent_off * initial_guesses * np.random.uniform(-1, 1, (nwalkers, ndim)))
-    pos = initial_free_values + np.random.normal(0, percent_off * np.abs(initial_free_values), size=(nwalkers, ndim))
+    pos = initial_free_values + np.random.normal(0, percent_off * np.abs(initial_free_values), size=(nwalkers, ndim))'''
+    
+    spread_frac = 0.05  
+    #spread_frac = 0.05  # or even 0.1
+    pos = []
+
+    pos = []
+    for _ in range(nwalkers):
+        walker = []
+        for val in initial_free_values:
+            spread = max(spread_frac * abs(val), 0.1)  # avoid tiny spread
+            walker.append(np.random.normal(val, spread))
+        pos.append(walker)
+    pos = np.array(pos)
     
     #12 max
     #5x faster!
     num_processes = os.cpu_count()
     with Pool(num_processes) as pool:
-        sampler = emcee.EnsembleSampler(nwalkers, 
-                                        ndim, 
-                                        log_multi_probability, 
-                                        args=(line_dict, elements, mcmc_lines, free_indices, fixed_values, anchor_map, shape))
+        sampler = emcee.EnsembleSampler(nwalkers, ndim, log_multi_probability,
+                                        args=(line_dict, elements, mcmc_lines,
+                                            free_indices, fixed_values, anchor_map, shape,
+                                            thermal_map, nonthermal_set),
+                                            moves=emcee.moves.DEMove())
+
         sampler.run_mcmc(pos, nsteps, progress=True)
 
     # Analyzing the results
@@ -462,14 +501,19 @@ def mcmc(initial_guesses,statuses, nsteps=1000,nwalkers=250):
     map_params = flat_samples[np.argmax(log_probs)]
 
     #rebuild params 
-    map_params = rebuild_full_params(map_params,free_indices,fixed_values,anchor_map,shape)
+    map_params = flat_samples[np.argmax(log_probs)]
+
+    map_params = rebuild_full_params(map_params, free_indices, fixed_values, anchor_map,
+                                 shape, thermal_map, nonthermal_set, elements)
+
     full_samples = []
     for free_sample in flat_samples:
         full_vec = rebuild_full_params(
-            free_sample, free_indices, fixed_values, anchor_map, shape
+            free_sample, free_indices, fixed_values, anchor_map, shape,
+            thermal_map, nonthermal_set, elements
         )
         full_samples.append(full_vec)
-    full_samples = np.array(full_samples)
+
 
     save_object(map_params,'static/Data/multi_mcmc/final/map_params.pkl')
 
@@ -481,31 +525,46 @@ def mcmc(initial_guesses,statuses, nsteps=1000,nwalkers=250):
 
     #_________________________________________________________________________________________  
     #corner plot
+    params_per_microline = 1 + 2 * len(elements)
+
+    full_samples = np.array(full_samples)
+
+    
 
     for i, mcmc_line_obj in enumerate(mcmc_lines):
 
-        labels=[]
-        labels.extend([f'velocity'])
-        for e in elements:
-            labels.extend([f'LogN_{e}',f'b_{e}'])
+        labels = []
+        for j, base_label in enumerate(['velocity'] + [f'LogN_{e}' if k % 2 == 0 else f'b_{e}' for e in elements for k in range(2)]):
+            status = statuses[i][j]
+            if status == 'fixed':
+                labels.append(f'{base_label} [fixed]')
+            elif status.startswith('anchor_to'):
+                labels.append(f'{base_label} [anchored]')
+            else:
+                labels.append(base_label)
 
-        # Filter samples and labels
-        filtered_samples = []
 
-        for j, label in enumerate(labels):
-            # Check if the maximum absolute value of the parameter samples is above the threshold
-            filtered_samples.append(flat_samples[:, j])
+        # Extract the block of samples for this component
+        start = i * params_per_microline
+        end = start + params_per_microline
+        param_block = full_samples[:, start:end]  # shape: (n_samples, params_per_microline)
 
-        # Generate the corner plot with filtered data
+        # Add tiny noise to constant columns
+        for col in range(param_block.shape[1]):
+            std = np.std(param_block[:, col])
+            if std < 1e-10:
+                param_block[:, col] += np.random.normal(0, 1e-6, size=param_block.shape[0])
+
+        # Create the corner plot for just this component
         figure = corner.corner(
-            np.array(filtered_samples).T,
+            param_block,
             labels=labels,
             quantiles=[0.16, 0.5, 0.84], 
             show_titles=True, 
             title_kwargs={"fontsize": 12}
         )
 
-        plt.savefig(f"/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/Data/multi_mcmc/final/mcmc_corner_{i}.png")
+        plt.savefig(f"static/Data/multi_mcmc/final/mcmc_corner_{i}.png")
         plt.clf()
 
     #_________________________________________________________________________________________  
@@ -564,11 +623,155 @@ def mcmc(initial_guesses,statuses, nsteps=1000,nwalkers=250):
 
     save_object(line_dict,'static/Data/multi_mcmc/final/line_dict.pkl')
     save_object(mcmc_lines,'static/Data/multi_mcmc/final/mcmc_lines.pkl')
+
+    print("Acceptance fraction:", np.mean(sampler.acceptance_fraction))
+
+    try:
+        tau = sampler.get_autocorr_time()
+        print("Autocorrelation time:", tau)
+    except emcee.autocorr.AutocorrError:
+        print("Warning: Chain too short to estimate autocorrelation time")
+
     
     #for i,object in enumerate(mcmc_lines):
     #    save_object(i,f'static/Data/multi_mcmc/final/mcmc_lines{i}.pkl')
 
 
+def continue_mcmc(nsteps, nwalkers):
+    """Continue MCMC from the last chain for a given number of steps, honoring fixed/anchored statuses."""
+
+    # Load data from disk
+    prev_chain = np.load('static/Data/multi_mcmc/chain.npy')
+    map_params = load_object('static/Data/multi_mcmc/final/map_params.pkl')
+
+    line_dict = load_object('static/Data/multi_mcmc/final/line_dict.pkl')
+    mcmc_lines = load_object('static/Data/multi_mcmc/final/mcmc_lines.pkl')
+    elements = load_object('static/Data/multi_mcmc/initial/initial_element_list.pkl')
+    statuses = load_object('static/Data/multi_mcmc/initial/initial_statuses.pkl')
+
+    # Rebuild structure
+    param_list_2d = load_object('static/Data/multi_mcmc/initial/initial_guesses.pkl')
+    shape = np.array(param_list_2d).shape
+
+    # Parse status maps
+    free_indices, fixed_values, anchor_map, thermal_map, nonthermal_set = parse_statuses(statuses, initial_guesses)
+
+    # Prepare starting positions
+    percent_off = 0.0001
+    pos = np.array(map_params) + np.random.normal(0, percent_off * np.abs(map_params), size=(nwalkers, len(map_params)))
+
+    # Run MCMC
+    with Pool(os.cpu_count()) as pool:
+        sampler = emcee.EnsembleSampler(
+            nwalkers,
+            len(map_params),
+            log_multi_probability,
+            args=(line_dict, elements, mcmc_lines, free_indices, fixed_values, anchor_map, shape),
+            pool=pool
+        )
+        sampler.run_mcmc(pos, nsteps, progress=True)
+
+    # Analyze samples
+    flat_samples = sampler.get_chain(discard=100, thin=15, flat=True)
+    log_probs = sampler.get_log_prob(discard=100, thin=15, flat=True)
+    map_params = flat_samples[np.argmax(log_probs)]
+
+    #rebuild params 
+    map_params = rebuild_full_params(free_values, free_indices, fixed_values, anchor_map,
+                             shape, thermal_map, nonthermal_set, elements)
+    full_samples = []
+    for free_sample in flat_samples:
+        full_vec = rebuild_full_params(free_values, free_indices, fixed_values, anchor_map,
+                             shape, thermal_map, nonthermal_set, elements)
+        full_samples.append(full_vec)
+    full_samples = np.array(full_samples)
+
+    save_object(map_params,'static/Data/multi_mcmc/final/map_params.pkl')
+
+    # Rebuild param list for plot
+    full_param_vec = rebuild_full_params(free_values, free_indices, fixed_values, anchor_map,
+                             shape, thermal_map, nonthermal_set, elements)
+    param_list_2d = np.array(full_param_vec).reshape(shape)
+
+    # Plot fit
+    plot_fits(param_list_2d, line_dict, elements, mcmc_lines, 'final/final_models')
+
+    #_________________________________________________________________________________________  
+    #corner plot
+    params_per_microline = 1 + 2 * len(elements)
+
+    for i, mcmc_line_obj in enumerate(mcmc_lines):
+        labels = ['velocity']
+        for e in elements:
+            labels.extend([f'LogN_{e}', f'b_{e}'])
+
+        # Extract the block of samples for this component
+        start = i * params_per_microline
+        end = start + params_per_microline
+        param_block = full_samples[:, start:end]  # shape: (n_samples, params_per_microline)
+
+        # Create the corner plot for just this component
+        figure = corner.corner(
+            param_block,
+            labels=labels,
+            quantiles=[0.16, 0.5, 0.84], 
+            show_titles=True, 
+            title_kwargs={"fontsize": 12}
+        )
+
+        plt.savefig(f"static/Data/multi_mcmc/final/mcmc_corner_{i}.png")
+        plt.clf()
+
+        #_________________________________________________________________________________________  
+    #trace plot
+
+    threshold = .01
+
+    def plot_trace(sampler, param_names, threshold=1.0, filter_below_threshold=False):
+        nwalkers, nsteps, ndim = sampler.chain.shape
+
+        # Determine which parameters to plot based on the threshold
+        if filter_below_threshold:
+            filtered_indices = []
+            filtered_param_names = []
+            for i, name in enumerate(param_names):
+                # Flatten the parameter samples and check if max is above the threshold
+                param_samples = sampler.chain[:, :, i].flatten()
+                if np.max(np.abs(param_samples)) >= threshold:
+                    filtered_indices.append(i)
+                    filtered_param_names.append(name)
+        else:
+            filtered_indices = list(range(ndim))
+            filtered_param_names = param_names
+
+        # Plot only the filtered parameters
+        fig, axes = plt.subplots(len(filtered_indices), figsize=(10, 3 * len(filtered_indices)), sharex=True)
+        
+        if len(filtered_indices) == 1:
+            axes = [axes]
+
+        for ax, i in zip(axes, filtered_indices):
+            for j in range(nwalkers):
+                ax.plot(sampler.chain[j, :, i], "k", alpha=0.3)
+            ax.set_xlim(0, nsteps)
+            ax.set_ylabel(filtered_param_names[filtered_indices.index(i)])
+            ax.yaxis.set_label_coords(-0.1, 0.5)
+
+        axes[-1].set_xlabel("Step number")
+        plt.tight_layout(h_pad=0)
+        plt.savefig("/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/Data/multi_mcmc/final/mcmc_trace.png")
+        plt.clf()
+
+    plot_trace(sampler, labels, threshold=threshold, filter_below_threshold=True)
+
+    # Summary table
+    df = summarize_params(full_samples, labels, elements, mcmc_lines, 'final/mcmc_results')
+
+    # Save updated chain
+    chain = sampler.get_chain()
+    np.save('static/Data/multi_mcmc/chain.npy', chain)
+    save_object(line_dict, 'static/Data/multi_mcmc/final/line_dict.pkl')
+    save_object(mcmc_lines,'static/Data/multi_mcmc/final/mcmc_lines.pkl')
 
 
 
@@ -589,19 +792,6 @@ def run_multi_mcmc(absorber,elements,nsteps=1000,nwalkers=250):
 
 
     line_list = line_dict.values()
-
-    '''
-    for line in line_list:
-
-        if custom:
-            line.find_mcmc_microlines()
-
-        line.update_mcmc_microlines()
-
-        for microline in line.mcmc_microlines:
-
-            #microline.actual_ew_func()
-            microline.calc_linear_N()'''
 
 
     #_________________________________________________________________________________________
@@ -1234,168 +1424,6 @@ def run_mcmc(absorber,element, nsteps=1000, nwalkers=250, custom=False):
     #save the chain
     chain=sampler.get_chain()
     np.save('static/Data/mcmc/chain.npy', chain)  # Saves the chain
-
-def continue_mcmc(nsteps,nwalkers):
-    
-    """Continue MCMC from the last chain for a given number of steps."""
-
-    #load previous items
-    chain=np.load('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/Data/multi_mcmc/chain.npy')
-    line_dict=load_object('static/Data/multi_mcmc/final/line_dict.pkl')
-
-    mcmc_lines=[]
-    files = os.listdir('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/Data/multi_mcmc/final')
-    filtered_files = [file for file in files if "mcmc_lines" in file]
-    for i,object in enumerate(filtered_files):
-        mcmc_lines.append(load_object(f'static/Data/multi_mcmc/final/mcmc_lines{i}.pkl'))
-
-    elements_dict={}
-    for key,value in line_dict.items():
-        elements_dict[key.split(' ')[0]]=value
-    elements=elements_dict.keys()
-
-    # Get the last positions of the walkers
-    '''
-    nwalkers, _, ndim = chain.shape
-    pos = chain[:, -1, :]
-
-    flat_samples = pos
-    median_params = np.median(flat_samples,axis=0)
-
-    log_probs = sampler.get_log_prob(discard=100, thin=15, flat=True)
-    map_params = flat_samples[np.argmax(log_probs)]'''
-
-    map_params=load_object('static/Data/multi_mcmc/final/map_params.pkl')
-
-    ndim = len(map_params)
-    percent_off = 0.0001
-    pos = map_params + np.random.normal(0, percent_off * np.abs(map_params), size=(nwalkers, ndim))
-
-    # Run MCMC for additional steps
-    num_processes = os.cpu_count()
-    with Pool(num_processes) as pool:
-        sampler = emcee.EnsembleSampler(nwalkers, ndim, log_multi_probability, args=(line_dict, elements, mcmc_lines), pool=pool)
-        sampler.run_mcmc(pos, nsteps, progress=True)
-
-    # Analyzing the results
-    flat_samples = sampler.get_chain(discard=100, thin=15, flat=True)
-    median_params = np.median(flat_samples,axis=0)
-
-    log_probs = sampler.get_log_prob(discard=100, thin=15, flat=True)
-    map_params = flat_samples[np.argmax(log_probs)]
-
-    #_________________________________________________________________________________________  
-    #plot all fits
-
-    plot_fits(map_params,line_dict,elements,mcmc_lines,'final/final_models')
-
-
-    #_________________________________________________________________________________________  
-    #corner plot
-
-    #threshold = .01
-
-    #labels=[]
-    for i,mcmc_line_obj in enumerate(mcmc_lines):
-        labels=[]
-        labels.extend([f'Component_{i}_velocity'])
-        for e in elements:
-            labels.extend([f'Component_{i}_{e}_LogN',f'Component_{i}_{e}_b'])
-
-        figure = corner.corner(
-        flat_samples[:, i], 
-        labels=labels,
-        quantiles=[0.16, 0.5, 0.84], 
-        show_titles=True, 
-        title_kwargs={"fontsize": 12}
-        )
-
-        plt.savefig("/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/Data/multi_mcmc/final/mcmc_corner_component_{i}.png")
-        plt.clf()
-
-    # Filter samples and labels
-    '''filtered_samples = []
-    filtered_labels = []
-
-    for i, label in enumerate(labels):
-        # Check if the maximum absolute value of the parameter samples is above the threshold
-        if np.max(np.abs(flat_samples[:, i])) >= threshold:
-            filtered_samples.append(flat_samples[:, i])
-            filtered_labels.append(label)
-
-    # Convert the filtered samples to the correct shape for corner plot
-    filtered_samples = np.array(filtered_samples).T
-
-    # Generate the corner plot with filtered data
-    figure = corner.corner(
-        filtered_samples, 
-        labels=filtered_labels,
-        quantiles=[0.16, 0.5, 0.84], 
-        show_titles=True, 
-        title_kwargs={"fontsize": 12}
-    )
-
-    plt.savefig("/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/Data/multi_mcmc/final/mcmc_corner.png")
-    plt.clf()'''
-
-    #_________________________________________________________________________________________  
-    #trace plot
-
-    threshold=.1
-
-    def plot_trace(sampler, param_names, threshold=1.0, filter_below_threshold=False):
-        nwalkers, nsteps, ndim = sampler.chain.shape
-
-        # Determine which parameters to plot based on the threshold
-        if filter_below_threshold:
-            filtered_indices = []
-            filtered_param_names = []
-            for i, name in enumerate(param_names):
-                # Flatten the parameter samples and check if max is above the threshold
-                param_samples = sampler.chain[:, :, i].flatten()
-                if np.max(np.abs(param_samples)) >= threshold:
-                    filtered_indices.append(i)
-                    filtered_param_names.append(name)
-        else:
-            filtered_indices = list(range(ndim))
-            filtered_param_names = param_names
-
-        # Plot only the filtered parameters
-        fig, axes = plt.subplots(len(filtered_indices), figsize=(10, 3 * len(filtered_indices)), sharex=True)
-        
-        if len(filtered_indices) == 1:
-            axes = [axes]
-
-        for ax, i in zip(axes, filtered_indices):
-            for j in range(nwalkers):
-                ax.plot(sampler.chain[j, :, i], "k", alpha=0.3)
-            ax.set_xlim(0, nsteps)
-            ax.set_ylabel(filtered_param_names[filtered_indices.index(i)])
-            ax.yaxis.set_label_coords(-0.1, 0.5)
-
-        axes[-1].set_xlabel("Step number")
-        plt.tight_layout(h_pad=0)
-        plt.savefig("/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/Data/multi_mcmc/final/mcmc_trace.png")
-        plt.clf()
-
-    plot_trace(sampler, labels, threshold=threshold, filter_below_threshold=True)
-
-    #__________________________________________________________________________________________
-    #make table like his plot
-
-    df = summarize_params(flat_samples, labels, elements, mcmc_lines,'final/mcmc_results')
-    #df.to_csv('multi_mcmc_results.csv')
-    #df.to_latex(index=False, column_format='cccccc')
-
-    #__________________________________________________________________________________________
-    #save the chain
-    chain=sampler.get_chain()
-    np.save('static/Data/multi_mcmc/chain.npy', chain)  # Saves the chain
-
-    save_object(line_dict,'static/Data/multi_mcmc/final/line_dict.pkl')
-    
-    for i,object in enumerate(mcmc_lines):
-        save_object(i,f'static/Data/multi_mcmc/final/mcmc_lines{i}.pkl')
 
 #____________________________________________________________________________________________________________
 #initial param optimization with lmfit

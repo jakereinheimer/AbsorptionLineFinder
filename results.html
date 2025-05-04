@@ -102,29 +102,6 @@
                 <button type="submit">Update Plot</button>
             </form>
 
-            <!-- MCMC for the selected element and absorber -->
-            <form action="{{ url_for('mcmc_for_lines') }}" method="post">
-                <input type="hidden" name="absorber_z" value="{{ absorber.z }}">
-                <input type="hidden" name="absorber_index" value="{{ loop.index0 }}">
-
-                <label for="mcmc_element_{{ loop.index0 }}">Select Element for MCMC:</label>
-                <select id="mcmc_element_{{ loop.index0 }}" name="mcmc_element">
-                    {% for element in absorber.list_found_elements() %}
-                        <option value="{{ element }}" {% if element == 'MgII' %} selected {% endif %}>
-                            {{ element }}
-                        </option>
-                    {% endfor %}
-                </select>
-
-                <label for="mcmc_steps_{{ loop.index0 }}">MCMC Steps:</label>
-                <input type="number" id="mcmc_steps_{{ loop.index0 }}" name="mcmc_steps" value="1000" min="100" max="100000" required>
-
-                <label for="mcmc_walkers_{{ loop.index0 }}">MCMC Walkers:</label>
-                <input type="number" id="mcmc_walkers_{{ loop.index0 }}" name="mcmc_walkers" value="250" min="10" max="1000" required>
-
-                <button type="submit">Run MCMC</button>
-            </form>
-
             <!-- Multi-Element MCMC Form with Checkboxes -->
             <form action="{{ url_for('multi_mcmc') }}" method="post">
                 <input type="hidden" name="absorber_index" value="{{ loop.index0 }}">
@@ -138,12 +115,6 @@
                         </label>
                     {% endfor %}
                 </div>
-
-                <label for="multi_mcmc_steps_{{ loop.index0 }}">MCMC Steps:</label>
-                <input type="number" id="multi_mcmc_steps_{{ loop.index0 }}" name="multi_mcmc_steps" value="1000" min="100" max="100000" required>
-
-                <label for="multi_mcmc_walkers_{{ loop.index0 }}">MCMC Walkers:</label>
-                <input type="number" id="multi_mcmc_walkers_{{ loop.index0 }}" name="multi_mcmc_walkers" value="250" min="10" max="1000" required>
 
                 <button type="submit">Run Multi MCMC</button>
             </form>
@@ -184,46 +155,7 @@ function updatePlot(event, absorberIndex) {
 
 </div>
 
-<!-- Doublet Selection Section -->
-<button class="collapsible">
-    <span>Hand find absorptions</span>
-    <span class="arrow">▶</span>
-</button>
-
-<div class="content">
-
-    <button onclick="startHandSelect()">Select Absorption Line</button>
-
-    {% if custom_absorptions %}
-        <h2>Manually Selected Absorptions</h2>
-        <ul>
-            {% for key, absorption in custom_absorptions.items() %}
-                <li>
-                    <strong>{{ key }}</strong><br>
-                    <img src="data:image/png;base64,{{ absorption.plot_base64 }}" width="30%">
-                </li>
-            {% endfor %}
-        </ul>
-    {% else %}
-        <p>No custom absorptions yet.</p>
-    {% endif %}
-
-    <!-- Multi-Element MCMC  -->
-    <form action="{{ url_for('custom_multi_mcmc') }}" method="post">
-
-        <label>Select Elements for Multi MCMC:</label>
-
-        <label for="custom_multi_mcmc_steps">MCMC Steps:</label>
-        <input type="number" id="custom_multi_mcmc_steps" name="custom_multi_mcmc_steps" value="1000" min="100" max="100000" required>
-
-        <label for="custom_multi_mcmc_walkers">MCMC Walkers:</label>
-        <input type="number" id="custom_multi_mcmc_walkers" name="custom_multi_mcmc_walkers" value="250" min="10" max="1000" required>
-
-        <button type="submit">Run MCMC</button>
-    </form>
-</div>
-
-<!-- Doublet Selection Section -->
+<!-- MGII smart find selection -->
 <button onclick='' class="collapsible">
     <span>Smart Find MgII</span>
     <span class="arrow">▶</span>
@@ -334,6 +266,180 @@ function updatePlot(event, absorberIndex) {
         }
     });
 </script>
+
+<!-- hand find Section -->
+<button class="collapsible">
+    <span>Hand find absorptions</span>
+    <span class="arrow">▶</span>
+</button>
+
+<div class="content">
+
+    <button onclick="startHandSelect()">Select Absorption Line</button>
+
+    {% if custom_absorptions %}
+        <h2>Manually Selected Absorptions</h2>
+        <ul>
+            {% for key, absorption in custom_absorptions.items() %}
+                <li>
+                    <strong>{{ key }}</strong><br>
+                    <img src="data:image/png;base64,{{ absorption.plot_base64 }}" width="30%">
+                </li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <p>No custom absorptions yet.</p>
+    {% endif %}
+
+    <!-- Multi-Element MCMC  -->
+    <form action="{{ url_for('custom_multi_mcmc') }}" method="post">
+
+        <label>Select Elements for Multi MCMC:</label>
+
+        <label for="custom_multi_mcmc_steps">MCMC Steps:</label>
+        <input type="number" id="custom_multi_mcmc_steps" name="custom_multi_mcmc_steps" value="1000" min="100" max="100000" required>
+
+        <label for="custom_multi_mcmc_walkers">MCMC Walkers:</label>
+        <input type="number" id="custom_multi_mcmc_walkers" name="custom_multi_mcmc_walkers" value="250" min="10" max="1000" required>
+
+        <button type="submit">Run MCMC</button>
+    </form>
+</div>
+
+<!-- Manual Absorption Line Selector -->
+<button class="collapsible">
+    <span>Manual Absorption Line Selector</span>
+    <span class="arrow">▶</span>
+</button>
+
+<div class="content">
+    <div id="manualAbsorptionPlot" style="width: 90%; margin: auto; height: 500px;"></div>
+
+    <div style="text-align: center; margin-top: 10px;">
+        <label for="manual_element">Element:</label>
+        <input type="text" id="manual_element" required>
+
+        <label for="manual_transition">Transition:</label>
+        <input type="number" id="manual_transition" step="any" required>
+
+        <button id="addAbsorptionBtn">Add Absorption Line</button>
+    </div>
+
+    <h3>Manually Added Absorptions:</h3>
+    <ul id="manualAbsorptionsList">
+        <!-- Populated dynamically -->
+    </ul>
+
+    <!-- Multi-Element MCMC  -->
+    <form action="{{ url_for('multi_mcmc') }}" method="post">
+        <input type="hidden" name="absorber_index" value="{{ 101 }}">
+
+        <button type="submit">Run MCMC</button>
+    </form>
+</div>
+
+<script>
+    // Manual absorption selector logic
+    let manualSelectedRange = {xmin: null, xmax: null};
+    
+    // Fetch the same spectrum data as Smart Find
+    fetch('/data')
+    .then(response => response.json())
+    .then(data => {
+        const traces = [
+            {
+                x: data.wavelength,
+                y: data.flux,
+                mode: 'lines',
+                name: 'Flux',
+                type: 'line',
+                line: { color: 'black', width: 1 }
+            },
+            {
+                x: data.wavelength,
+                y: data.error,
+                mode: 'lines',
+                name: 'Error',
+                type: 'line',
+                line: { color: 'blue', width: 1 }
+            }
+        ];
+    
+        const layout = {
+            title: 'Select Absorption Range',
+            xaxis: { title: 'Wavelength' },
+            yaxis: { title: 'Flux' },
+            dragmode: 'select',
+            updatemenus: [{
+                buttons: [
+                    { method: 'relayout', args: ['dragmode', 'select'], label: 'Select' },
+                    { method: 'relayout', args: ['dragmode', 'pan'], label: 'Pan' }
+                ]
+            }]
+        };
+    
+        Plotly.newPlot('manualAbsorptionPlot', traces, layout, {responsive: true})
+        .then(() => {
+            const plotDiv = document.getElementById('manualAbsorptionPlot');
+            plotDiv.on('plotly_selected', function(eventData) {
+                if (eventData) {
+                    manualSelectedRange.xmin = eventData.range.x[0];
+                    manualSelectedRange.xmax = eventData.range.x[1];
+                    console.log('Selected Range:', manualSelectedRange);
+                }
+            });
+        });
+    });
+    
+    // Handle adding absorption line
+    document.getElementById('addAbsorptionBtn').addEventListener('click', function() {
+        const element = document.getElementById('manual_element').value.trim();
+        const transition = parseFloat(document.getElementById('manual_transition').value);
+    
+        if (!manualSelectedRange.xmin || !manualSelectedRange.xmax || !element || isNaN(transition)) {
+            alert('Please select a range and enter element and transition.');
+            return;
+        }
+    
+        const absorptionData = {
+            xmin: manualSelectedRange.xmin,
+            xmax: manualSelectedRange.xmax,
+            element: element,
+            transition: transition
+        };
+    
+        fetch('/add_manual_absorption', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(absorptionData)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                updateManualAbsorptionsList(data.absorptions);
+            } else {
+                alert('Failed to add absorption.');
+            }
+        })
+        .catch(error => console.error('Error:', error));
+    });
+    
+    // Update the manual absorptions list
+    function updateManualAbsorptionsList(absorptions) {
+    const list = document.getElementById('manualAbsorptionsList');
+    list.innerHTML = '';  // Clear existing items
+
+    for (const [key, absorption] of Object.entries(absorptions)) {
+        const li = document.createElement('li');
+        li.innerHTML = `
+            <strong>${key}</strong><br>
+            <img src="data:image/png;base64,${absorption.plot_base64}" width="40%" />
+        `;
+        list.appendChild(li);
+        }
+    }
+    </script>
+    
 
 
 <script>

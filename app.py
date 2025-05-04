@@ -113,34 +113,47 @@ def upload_data():
 
     clean_house()
 
-    file = request.files['data_file']
-    if file.filename == '':
-        flash('No selected file')
+    files = request.files.getlist('data_files')
+    
+    if not files or files[0].filename == '':
+        flash('No selected files')
         return redirect(request.url)
-    if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
-        filepath = os.path.join('/Users/jakereinheimer/Desktop/Fakhri/data/custom/', filename)  # Specify your path for saving files
-        file.save(filepath)
 
-        nmf_requested = 'nmf' in request.form
-        
-        if nmf_requested:
-            vp = VPFit(filepath,
-                    'custom',
-                    'nmf')
-            vp.DoAll()
+    upload_dir = '/Users/jakereinheimer/Desktop/Fakhri/data/custom/'
+    saved_filepaths = []
+
+    for file in files:
+        if file and allowed_file(file.filename):
+            filename = secure_filename(file.filename)
+            filepath = os.path.join(upload_dir, filename)
+            file.save(filepath)
+            saved_filepaths.append(filepath)
         else:
-            vp = VPFit(filepath,
-                    'custom',
-                    '')
-            vp.DoAll()
-
+            flash(f'File type not allowed: {file.filename}')
+            return redirect(request.url)
+    
+    nmf_requested = 'nmf' in request.form
         
-
-        return redirect(url_for('show_results'))  # Or however you want to handle the next step
+    if nmf_requested:
+        name='nmf'
+        vp = VPFit(saved_filepaths,
+                'custom',
+                name)
+        vp.DoAll()
     else:
-        flash('File type not allowed')
-        return redirect(request.url)
+        name=''
+        vp = VPFit(saved_filepaths,
+                'custom',
+                name)
+        vp.DoAll()
+    
+    filename = f'/Users/jakereinheimer/Desktop/Fakhri/VPFit/saved_objects/custom/{name}_vpfit.pkl'
+
+    save_object(vp, filename) 
+    save_object(vp,'current_vp.pkl')
+    save_object({},'custom_absorptions.pkl')
+
+    return redirect(url_for('show_results'))  # Or however you want to handle the next step
 
 
 
@@ -169,51 +182,14 @@ def analyze():
     vp.DoAll()
 
     save_object(vp, filename)  # Save the processed object
+    save_object(vp, 'current_vp.pkl')
+    save_object({},'custom_absorptions.pkl')
 
     return redirect(url_for('show_results'))
 
 @app.route('/velocity_plots/<filename>')
 def velocity_plots(filename):
     return url_for('Absorbers', filename=f'vel_plots/{filename}')
-
-'''
-@app.route('/show_results', methods=['GET', 'POST'])
-def show_results():
-    absorbers = [load_object(os.path.join('Absorbers/objs/', item)) for item in os.listdir('Absorbers/objs/') if item.endswith('.pkl')]
-
-    for i,absorber in enumerate(absorbers):
-        absorber.make_vel_plot('MgII',i)
-
-    # Prepare default plot URLs for each absorber
-    plot_urls = [url_for('static', filename=f'Data/velocity_plots/velocityPlot_MgII_{i}.png') for i in range(len(absorbers))]
-
-    selected_absorber_index = None
-    selected_element = None
-
-    if request.method == 'POST':
-        try:
-            selected_absorber_index = int(request.form.get('absorber_index'))
-            selected_element = request.form.get('element')
-
-            if selected_absorber_index is not None and selected_element:
-                absorber = absorbers[selected_absorber_index]
-                absorber.make_vel_plot(selected_element)
-
-                print(selected_absorber_index)
-                print(selected_element)
-
-                plot_urls[selected_absorber_index] = url_for('static', filename=f'Data/velocity_plots/velocityPlot_{selected_element}_{selected_absorber_index}.png')
-
-        except (ValueError, IndexError) as e:
-            print(f"Error processing form data: {e}")
-
-    return render_template(
-        'results.html',
-        absorbers=absorbers,
-        plot_urls=plot_urls,
-        selected_element=selected_element,
-        selected_absorber_index=selected_absorber_index
-    )'''
 
 @app.route('/show_results', methods=['GET', 'POST'])
 def show_results():
@@ -246,84 +222,45 @@ def update_plot():
     except Exception as e:
         print(f"Error updating plot: {e}")
         return jsonify({'error': str(e)}), 500
+    
+    
+@app.route('/add_manual_absorption', methods=['POST'])
+def add_manual_absorption():
 
+    data = request.json
+    xmin = float(data['xmin'])
+    xmax = float(data['xmax'])
+    element = data['element']
+    transition = float(data['transition'])
 
+    # Load the current VPFit object
+    vp = load_object('current_vp.pkl')
+    custom_absorptions=load_object('custom_absorptions.pkl')
 
+    # Create a new absorption line object using VPFit's method
+    absorption_line = vp.make_new_absorption(xmin, xmax, element, transition)
 
+    absorption_line.plot()
 
-'''
-@app.route('/show_results', methods=['GET', 'POST'])
-def show_results():
+    # Add to shared custom_absorptions dict (element + transition as key)
+    custom_absorptions[absorption_line.name] = absorption_line
 
-    if request.method == 'POST':
-        selected_doublet = request.form['doublet']
-        session['selected_doublet'] = selected_doublet
-    else:
-        selected_doublet = session.get('selected_doublet', 'MgII.png')
+    # Prepare the list of absorptions to send back
+    absorptions_summary = {}
+    for k, v in custom_absorptions.items():
+        absorptions_summary[k] = {
+            'range': [v.wavelength[0], v.wavelength[-1]],
+            'name' : v.name,
+            'plot_base64': v.plot_base64
+        }
 
-    plot_url = url_for('static', filename=f'Data/velocity_plots/velocityPlot_{selected_doublet}')
-    print("Generated plot URL:", plot_url)  # Debugging to ensure the URL is correct
-    #num_of_pairs=os.listdir(quantize_file('found_lines/'+selected_doublet.split('.')[0]+'/')/2) /2
-    #num_of_pairs=quantize_file('found_lines/'+selected_doublet.split('.')[0]+'/')
-    num_of_pairs=1
+    save_object(custom_absorptions,'custom_absorptions.pkl')
 
-    # Create a list of indices for the number of buttons
-    button_indices = list(range(num_of_pairs))
+    return jsonify({'success': True, 'absorptions': absorptions_summary})
 
-    absorbers = [load_object(os.path.join('Absorbers/objs/', item)) for item in os.listdir('Absorbers/objs/') if item.endswith('.pkl')]
-
-    return render_template('results.html', plot_url=plot_url, selected_doublet=selected_doublet,absorbers=absorbers)'''
-
-'''
-@app.route('/mcmc', methods=['GET', 'POST'])
-def mcmc_for_lines():
-    if request.method == 'POST':
-        line_index = int(request.form['line_index']) # Obtain the index of the line pair
-        doublet=session['selected_doublet'].split('.')[0]
-
-        mcmc_steps = int(request.form.get('mcmc_steps', 1000))
-        mcmc_walkers= int(request.form.get('mcmc_walkers', 250))
-
-        results = run_mcmc(doublet,line_index,nsteps=mcmc_steps,nwalkers=mcmc_walkers)
-
-        plot_url = url_for('static', filename="Data/mcmc/mcmc_result.png")
-        trace_plot_url = url_for('static', filename="Data/mcmc/mcmc_trace.png")
-        corner_plot_url = url_for('static', filename="Data/mcmc/mcmc_corner.png")
-        #chain something
-
-        # Redirect or render a template to show the results
-        return render_template('mcmc_results.html', results=results, line_index=line_index,plot_url=plot_url,trace_plot_url=trace_plot_url,corner_plot_url=corner_plot_url,mcmc_steps=mcmc_steps,mcmc_walkers=mcmc_walkers)
-    else:
-        # If not a POST request, redirect to a default page or handle accordingly
-        return redirect(url_for('index'))
-'''
-
-@app.route('/mcmc', methods=['POST'])
-def mcmc_for_lines():
-    absorber_index = int(request.form['absorber_index'])
-    element = request.form['mcmc_element']
-    mcmc_steps = int(request.form.get('mcmc_steps', 1000))
-    mcmc_walkers = int(request.form.get('mcmc_walkers', 250))
-
-    absorbers = [load_object(os.path.join('Absorbers/objs/', item)) for item in os.listdir('Absorbers/objs/') if item.endswith('.pkl')]
-
-    if absorber_index >= len(absorbers):
-        return jsonify({'error': 'Invalid absorber index'}), 400
-
-    absorber = absorbers[absorber_index]
-
-    # Run MCMC for the selected element
-    print('running mcmc')
-    absorber.mcmc(element, nsteps=mcmc_steps, nwalkers=mcmc_walkers)
-    print('Succeded')
-
-    # Return results
-    return render_template('mcmc_results.html',
-                            plot_url=url_for('static', filename='Data/mcmc/mcmc_result.png'),
-                            trace_plot_url=url_for('static', filename='Data/mcmc/mcmc_trace.png'),
-                            corner_plot_url=url_for('static', filename='Data/mcmc/mcmc_corner.png'),
-                            mcmc_steps=mcmc_steps,
-                            mcmc_walkers=mcmc_walkers)
+    #except Exception as e:
+    #    print(f"Error adding manual absorption: {e}")
+    #    return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/multi_mcmc', methods=['POST'])
@@ -342,6 +279,14 @@ def multi_mcmc():
 
     if absorber_index==100:
         absorber=load_object('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/Data/custom_absorber/custom_absorber.pkl')
+    
+    elif absorber_index==101:
+        absorber=load_object('custom_absorptions.pkl')
+        element_list_dict={}
+        for key,value in absorber.items():
+            element_list_dict[key.split(' ')[0]]=' '
+
+        element_list=list(element_list_dict.keys())
 
     else:
 
@@ -357,6 +302,14 @@ def multi_mcmc():
 
     num_params_per_line = 1 + 2 * len(element_list)
     param_list_2d = np.array(initial_guesses).reshape(-1, num_params_per_line)
+
+    display_params=param_list_2d.copy()
+    base_velocity = param_list_2d[0, 0]
+    display_params[:, 0] = np.round(param_list_2d[:, 0] - base_velocity, 1)
+
+    for i,e in enumerate(element_list):
+        display_params[:,1+(i*2)] = np.round(display_params[:,1+(i*2)],2)
+        display_params[:,2+(i*2)] = np.round(display_params[:,2+(i*2)],2)
 
     column_names=['Velocity']
     for e in element_list:
@@ -379,10 +332,11 @@ def multi_mcmc():
     save_object(param_list_2d,'static/Data/multi_mcmc/initial/algo_guesses.pkl')
 
     return render_template('pre_mcmc.html',
-                           parameters=param_list_2d,
+                           parameters=display_params,
                            statuses=statuses,
                            line_dict=line_dict,
                            column_names=column_names,
+                           elements=element_list,
                            random=random()
                            )
 
@@ -392,7 +346,8 @@ def mcmc_param_update():
     from random import random
 
 
-    param_list_2d=load_object('static/Data/multi_mcmc/initial/initial_guesses.pkl')
+    param_list_2d=np.array(load_object('static/Data/multi_mcmc/initial/initial_guesses.pkl'))
+    base_velocity = param_list_2d[0,0]
     num_rows=len(param_list_2d)
     num_cols=len(param_list_2d[0])
 
@@ -405,10 +360,17 @@ def mcmc_param_update():
         for j in range(num_cols):
             val = float(request.form[f'param_{i}_{j}'])
             status = request.form[f'status_{i}_{j}']
+
+            if j==0:
+                val += base_velocity
+
             param_row.append(val)
             status_row.append(status)
         params.append(param_row)
         statuses.append(status_row)
+
+    print('statuses')
+    print(statuses)
 
     element_list=load_object('static/Data/multi_mcmc/initial/initial_element_list.pkl')
     line_dict=load_object('static/Data/multi_mcmc/initial/initial_line_dict.pkl')
@@ -418,11 +380,22 @@ def mcmc_param_update():
 
     update_fit(params,element_list)
 
+    params_np = np.array(params)
+
+    display_params=params_np.copy()
+    base_velocity = params_np[0, 0]
+    display_params[:, 0] = np.round(params_np[:, 0] - base_velocity, 1)
+
+    for i,e in enumerate(element_list):
+        display_params[:,1+(i*2)] = np.round(display_params[:,1+(i*2)],2)
+        display_params[:,2+(i*2)] = np.round(display_params[:,2+(i*2)],2)
+
     return render_template('pre_mcmc.html',
-                           parameters=params,
+                           parameters=display_params,
                            statuses=statuses,
                            line_dict=line_dict,
                            column_names=column_names,
+                           elements=element_list,
                            random=random()
                            )
 
@@ -445,27 +418,66 @@ def actual_mcmc():
                             mcmc_steps=mcmc_steps,
                             mcmc_walkers=mcmc_walkers)
 
-    '''
-    # Run the multi_mcmc function with the selected elements
-    #absorber.multi_mcmc(element_list, nsteps=mcmc_steps, nwalkers=mcmc_walkers)
+@app.route('/add_component', methods=['POST'])
+def add_component():
+    from random import random
 
-    #print(f'Multi MCMC succeeded for elements: {element_list}')
+    # Load current guesses and statuses
+    parameters = load_object('static/Data/multi_mcmc/initial/initial_guesses.pkl')
+    statuses = load_object('static/Data/multi_mcmc/initial/initial_statuses.pkl')
+    column_names = load_object('static/Data/multi_mcmc/initial/column_names.pkl')
+    line_dict = load_object('static/Data/multi_mcmc/initial/initial_line_dict.pkl')
 
-    return render_template('mcmc_results.html',
-                            fit_plot_url = url_for('static', filename='Data/multi_mcmc/final/final_models.png'),
-                            plot_url=url_for('static', filename='Data/multi_mcmc/final/mcmc_results.csv'),
-                            trace_plot_url=url_for('static', filename='Data/multi_mcmc/final/mcmc_trace.png'),
-                            corner_plot_url=url_for('static', filename='Data/multi_mcmc/final/mcmc_corner.png'),
-                            mcmc_steps=mcmc_steps,
-                            mcmc_walkers=mcmc_walkers)'''
-    #except Exception as e:
-    #    print(f"Error running multi MCMC: {e}")
-    #    return f"Error: {e}", 500
+    # Create a new free row with reasonable values (copy from last row or use defaults)
+    new_row = list(parameters[-1])  # or [0.0]*len(parameters[0])
+    new_status_row = ['free'] * len(column_names)
+
+    parameters.append(new_row)
+    statuses.append(new_status_row)
+
+    save_object(parameters, 'static/Data/multi_mcmc/initial/initial_guesses.pkl')
+    save_object(statuses, 'static/Data/multi_mcmc/initial/initial_statuses.pkl')
+
+    return render_template('pre_mcmc.html',
+                           parameters=parameters,
+                           statuses=statuses,
+                           line_dict=line_dict,
+                           column_names=column_names,
+                           random=random())
+
+@app.route('/delete_component', methods=['POST'])
+def delete_component():
+    from random import random
+
+    parameters = load_object('static/Data/multi_mcmc/initial/initial_guesses.pkl')
+    statuses = load_object('static/Data/multi_mcmc/initial/initial_statuses.pkl')
+    column_names = load_object('static/Data/multi_mcmc/initial/column_names.pkl')
+    line_dict = load_object('static/Data/multi_mcmc/initial/initial_line_dict.pkl')
+
+    try:
+        index_to_remove = int(request.form['component_index'])
+    except (KeyError, ValueError):
+        index_to_remove = -1
+
+    if 0 <= index_to_remove < len(parameters) and len(parameters) > 1:
+        parameters.pop(index_to_remove)
+        statuses.pop(index_to_remove)
+
+    save_object(parameters, 'static/Data/multi_mcmc/initial/initial_guesses.pkl')
+    save_object(statuses, 'static/Data/multi_mcmc/initial/initial_statuses.pkl')
+
+    return render_template('pre_mcmc.html',
+                           parameters=parameters,
+                           statuses=statuses,
+                           line_dict=line_dict,
+                           column_names=column_names,
+                           random=random())
+
 
 @app.route('/data')
 def data():
 
-    vp = load_object(f'/Users/jakereinheimer/Desktop/Fakhri/VPFit/saved_objects/{session.get("selected_catalog")}/{session.get("selected_spectrum")}_vpfit.pkl')
+    vp = load_object(f'current_vp.pkl')
 
     wavelength = vp.wavelength
     flux = vp.flux
@@ -478,7 +490,7 @@ def data():
 @app.route('/save_selection', methods=['POST'])
 def save_selection():
 
-    vp = load_object(f'/Users/jakereinheimer/Desktop/Fakhri/VPFit/saved_objects/{session.get("selected_catalog")}/{session.get("selected_spectrum")}_vpfit.pkl')
+    vp = load_object('current_vp.pkl')
 
     data = request.json
     xmin = data['xmin']
@@ -502,6 +514,36 @@ def show_custom_results():
                            fluxplot=custom_absorber_fluxplot
                             )
 
+@app.route('/continue_mcmc', methods=['POST'])
+def continued_mcmc():
+
+    mcmc_steps = int(request.form.get('continued_multi_mcmc_steps', 1000))
+    mcmc_walkers = int(request.form.get('continued_multi_mcmc_walkers', 250))
+
+    map_params = load_object('static/Data/multi_mcmc/final/map_params.pkl')
+    statuses = load_object('static/Data/multi_mcmc/initial/initial_statuses.pkl')
+    elements=load_object('static/Data/multi_mcmc/initial/initial_element_list.pkl')
+
+    params_per_line = 1 + 2 * len(elements)
+    if map_params.ndim == 1:
+        initial_guesses = map_params.reshape(-1, params_per_line)
+
+
+    mcmc(initial_guesses,statuses,mcmc_steps,mcmc_walkers)
+
+    #clear_directory('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/Data/multi_mcmc/final')
+
+    # Run the continued MCMC
+    #continue_mcmc(mcmc_steps,mcmc_walkers)
+
+    return render_template('mcmc_results.html',
+                            fit_plot_url = url_for('static', filename='Data/multi_mcmc/final/final_models.png'),
+                            plot_url=url_for('static', filename='Data/multi_mcmc/final/mcmc_results.csv'),
+                            trace_plot_url=url_for('static', filename='Data/multi_mcmc/final/mcmc_trace.png'),
+                            corner_plot_url=url_for('static', filename='Data/multi_mcmc/final/mcmc_corner.png'),
+                            mcmc_steps=mcmc_steps,
+                            mcmc_walkers=mcmc_walkers)
+
     
 
 #pop up tkinter window
@@ -524,7 +566,7 @@ def launch_tk(selected_catalog, selected_spectrum, shared_custom_absorptions):
     root.title("Select Absorption Range")
 
     # Load Spectrum Data
-    vp = load_object(f'/Users/jakereinheimer/Desktop/Fakhri/VPFit/saved_objects/{selected_catalog}/{selected_spectrum}_vpfit.pkl')
+    vp = load_object('current_vp.pkl')
     wavelength = vp.wavelength
     flux = vp.flux
     error = vp.error
@@ -584,7 +626,7 @@ def launch_tk(selected_catalog, selected_spectrum, shared_custom_absorptions):
             return
 
         # Create new absorption line
-        vp = load_object(f'/Users/jakereinheimer/Desktop/Fakhri/VPFit/saved_objects/{selected_catalog}/{selected_spectrum}_vpfit.pkl')
+        vp = load_object('current_vp.pkl')
         shared_custom_absorptions[f"{element} {transition}"] = vp.make_new_absorption(start, end,element,transition)
         print(f"Added absorption: {element} {transition}, Range: {start:.2f} - {end:.2f}")
 
@@ -644,25 +686,6 @@ def custom_multi_mcmc():
                             mcmc_steps=mcmc_steps,
                             mcmc_walkers=mcmc_walkers)
 
-
-@app.route('/continue_mcmc', methods=['POST'])
-def continued_mcmc():
-
-    mcmc_steps = int(request.form.get('continued_multi_mcmc_steps', 1000))
-    mcmc_walkers = int(request.form.get('continued_multi_mcmc_walkers', 250))
-
-    #clear_directory('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/Data/multi_mcmc/final')
-
-    # Run the continued MCMC
-    continue_mcmc(mcmc_steps,mcmc_walkers)
-
-    return render_template('mcmc_results.html',
-                            fit_plot_url = url_for('static', filename='Data/multi_mcmc/final/final_models.png'),
-                            plot_url=url_for('static', filename='Data/multi_mcmc/final/mcmc_results.csv'),
-                            trace_plot_url=url_for('static', filename='Data/multi_mcmc/final/mcmc_trace.png'),
-                            corner_plot_url=url_for('static', filename='Data/multi_mcmc/final/mcmc_corner.png'),
-                            mcmc_steps=mcmc_steps,
-                            mcmc_walkers=mcmc_walkers)
 
 
 #Trident::::

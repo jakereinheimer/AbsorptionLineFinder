@@ -16,6 +16,7 @@ import plotly
 import json
 
 from essential_functions import read_atomDB,clear_directory
+from mcmc_functions import redshift_to_velocity
 #from mcmc import run_mcmc
 
 
@@ -76,8 +77,6 @@ class Absorber:
     
     def make_vel_plot(self,element,index=0):
         
-        #clear_directory('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/Data/velocity_plots/')
-
         import smplotlib
 
         c = 3e5  # Speed of light in km/s
@@ -103,7 +102,9 @@ class Absorber:
 
         reference_z=((strongest_line.MgII_wavelength[0]+strongest_line.MgII_wavelength[-1])/2 - strongest_line.suspected_line)/strongest_line.suspected_line
 
-
+        MgII_len=len(strongest_line.MgII_wavelength)
+        if MgII_len > 40:
+            velocity_window=400
 
         fig, axs = plt.subplots(len(lines), 1, figsize=(10, 3 * len(lines)), squeeze=False,sharex=True,sharey=True)
 
@@ -123,7 +124,7 @@ class Absorber:
 
             ax.step(velocity, lines[i].MgII_flux, where='mid', label=f"Spectrum of {lines[i].peak:.2f} Å", color="black")
 
-            for microline in line.mcmc_microlines:
+            for microline in line.microLines:
                 
                 microline_vel=(microline.wavelength - reference_microline) / reference_microline * c
 
@@ -308,7 +309,7 @@ class MicroAbsorptionLine:
 #____________________________________________________________________________________________________
 
 class AbsorptionLineSystem:
-    def __init__(self, vpfit,lines):
+    def __init__(self, vpfit,lines,full=False):
 
         self.vpfit=vpfit
 
@@ -321,6 +322,17 @@ class AbsorptionLineSystem:
         elif isinstance(lines,tuple):
             self.start_ind=lines[0]
             self.end_ind=lines[1]
+
+
+        if full:
+            # Expand left
+            while self.start_ind > 0 and self.vpfit.flux[self.start_ind] <= 1.0:
+                self.start_ind -= 1
+
+            # Expand right
+            while self.end_ind < len(self.vpfit.flux) - 1 and self.vpfit.flux[self.end_ind] <= 1.0:
+                self.end_ind += 1
+        
 
         self.wavelength=vpfit.wavelength[self.start_ind:self.end_ind]
         self.flux = vpfit.flux[self.start_ind:self.end_ind]
@@ -377,6 +389,21 @@ class AbsorptionLineSystem:
 
         self.f=float(row['Strength'])
         self.gamma=float(row['Tau'])
+
+    def set_line_info(self,element,transition):
+
+        row=AtomDB[(AtomDB['Floor'] == transition) & (AtomDB['Transition'] == element)]
+
+        self.suspected_line=float(row['Wavelength'])
+
+        self.f=float(row['Strength'])
+        self.gamma=float(row['Tau'])
+
+        self.name=f"{element} {self.suspected_line}"
+
+        self.MgII_wavelength=self.wavelength
+        self.MgII_flux=self.flux
+        self.MgII_errors=self.errors
 
     def MgII_dimensions(self,z_low,z_high,MgII=False):
 
@@ -437,18 +464,27 @@ class AbsorptionLineSystem:
     def actual_ew_func(self):
 
         self.suspected_z=(self.peak-self.suspected_line)/self.suspected_line
+
+        try:
+            wave=self.MgII_wavelength
+            flux=self.MgII_flux
+            error=self.MgII_errors
+        except:
+            wave=self.wavelength
+            flux=self.flux
+            error=self.errors
         
         # Adjust wavelengths for redshift
-        z_adjusted_wavelength = (1 / (1 + self.suspected_z)) * self.MgII_wavelength
+        z_adjusted_wavelength = (1 / (1 + self.suspected_z)) * wave
         
         # Differences in the adjusted wavelengths
         delta_lambda = np.diff(z_adjusted_wavelength)
         
         # Calculate equivalent width
-        self.actual_ew = np.sum((1 - self.MgII_flux[:-1]) * delta_lambda)
+        self.actual_ew = np.sum((1 - flux[:-1]) * delta_lambda)
         
         # Calculate the error in equivalent width
-        ew_errors = delta_lambda * self.MgII_errors[:-1]  # Assuming flux_errors array aligns with self.flux
+        ew_errors = delta_lambda * error[:-1]  # Assuming flux_errors array aligns with self.flux
         self.actual_ew_error = np.sqrt(np.sum(ew_errors**2))
         
         return self.actual_ew, self.actual_ew_error
@@ -581,12 +617,31 @@ class AbsorptionLineSystem:
         return self.graphJSON
 
         
-    def plot(self,name):
+    def plot(self):
         
-        plt.plot(self.wavelength,self.flux)
-        plt.axvline(self.peak)
-        plt.title(f"Equivalent width:{self.EW}")
-        plt.savefig("test_plot/"+name+".png")
+        plt.step(self.wavelength,self.flux,c='black',where='mid')
+        plt.step(self.wavelength,self.errors,c='cyan',where='mid')
+
+        self.actual_ew_func()
+
+        plt.title(f"{self.name} \nEquivalent width:{self.actual_ew:.2f} ")#\n LogN: {self.log_N:.2f}")
+
+        for microline in self.microLines:
+            plt.axvspan(microline.wavelength[0], microline.wavelength[-1], color='grey', alpha=0.3)
+            plt.axvline(microline.wavelength[0],c='grey',alpha=.3)
+            plt.axvline(microline.wavelength[-1],c='grey',alpha=.3)
+
+            plt.axvline(microline.peak,ymin=1.0,ymax=1.1,c='blue')
+
+        # Save plot to a BytesIO buffer
+        buffer = io.BytesIO()
+        plt.savefig(buffer, format='png')
+        plt.close()
+
+        # Encode plot to Base64
+        buffer.seek(0)
+        self.plot_base64 = base64.b64encode(buffer.read()).decode('utf-8')
+
         plt.clf()
 
     def export(self, name):
