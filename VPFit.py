@@ -33,8 +33,33 @@ class VPFit:
         print(f"Catalog : {self.catalog}")
         print(f"Name : {name}")
 
-        
-        if catalog=='custom':
+        if catalog == 'combined':
+            # Handle tuple of (red_paths, blue_paths, red_res, blue_res)
+            red_paths, blue_paths, red_res, blue_res = data_loc
+
+            from essential_functions import get_custom_data
+
+            red_flux, red_err, red_wave, _ = get_custom_data(red_paths)
+            blue_flux, blue_err, blue_wave, _ = get_custom_data(blue_paths)
+
+            # Merge by concatenation and sort by wavelength
+            combined = list(zip(np.concatenate([blue_wave, red_wave]),
+                                np.concatenate([blue_flux, red_flux]),
+                                np.concatenate([blue_err, red_err])))
+            combined.sort(key=lambda x: x[0])  # sort by wavelength
+
+            self.wavelength = np.array([w for w, _, _ in combined])
+            self.flux = np.array([f for _, f, _ in combined])
+            self.error = np.array([e for _, _, e in combined])
+
+            self.boundry=blue_wave[-1]
+
+            self.red_fwhm=red_res
+            self.blue_fwhm=blue_res
+
+            self.emitter_redshift = 2  # placeholder; could allow user input
+
+        elif catalog=='custom':
             if name=='NMF':
                 self.flux,self.error,self.wavelength,self.emitter_redshift=get_custom_data(data_loc,nmf=True)
             else:
@@ -44,6 +69,7 @@ class VPFit:
 
         else:
             self.flux,self.error,self.wavelength,self.emitter_redshift=get_data(data_loc,catalog,name)
+            self.boundry=self.wavelength[-1]
 
 
         if catalog=="Kodiaq":
@@ -89,7 +115,7 @@ class VPFit:
         else:
             self.p=4
             self.N=3
-            self.fwhm=7.5
+            self.fwhm=10
             self.tolerance_absorption_systems=30
 
 
@@ -149,7 +175,12 @@ class VPFit:
         sub_flux = self.flux[start_ind:stop_ind]
         sub_error = self.error[start_ind:stop_ind]
 
-        microlines=self.optimizedMethod(sub_wavelength,sub_flux,sub_error,beg_ind=start_ind,N=4)
+        print('wave')
+        print(sub_wavelength)
+
+        microlines=self.optimizedMethod(sub_wavelength,sub_flux,sub_error,beg_ind=start_ind,N=2)
+
+        print(microlines)
 
         abs=AbsorptionLineSystem(self,microlines,full=True)
 
@@ -539,9 +570,10 @@ class VPFit:
             start_ind = np.argmin(np.abs(self.wavelength - ((z_low+1)*2803.531)))
             stop_ind = np.argmin(np.abs(self.wavelength - ((z_high+1)*2803.531)))
 
-            microlines=self.optimizedMethod(self.wavelength[start_ind:stop_ind],self.flux[start_ind:stop_ind],self.error[start_ind:stop_ind],start_ind,N=1)
-            if len(microlines)>0:
-                pairs.append((line,AbsorptionLineSystem(self, microlines)))
+            #microlines=self.optimizedMethod(self.wavelength[start_ind:stop_ind],self.flux[start_ind:stop_ind],self.error[start_ind:stop_ind],start_ind,N=1)
+            #if len(microlines)>0:
+            #    pairs.append((line,AbsorptionLineSystem(self, microlines)))
+            pairs.append((line,AbsorptionLineSystem(self,(start_ind,stop_ind))))
 
 
         validated_systems=[]
@@ -595,11 +627,15 @@ class VPFit:
             i[1].name=f"MgII {MgII_doublet[1]}"
             i[1].update_line_attributes()
 
+            print('pair:')
             print(i[0].wavelength[0],i[0].wavelength[-1])
             print(i[1].wavelength[0],i[1].wavelength[-1])
 
+        '''self.absorptions.append(pair[0])
+        self.absorptions.append(pair[1])
+
         #fill absorbers list
-        '''self.absorbers=[]
+        self.absorbers=[]
 
         for i,pair in enumerate(validated_systems):
 
@@ -628,110 +664,106 @@ class VPFit:
         start_ind = np.argmin(np.abs(self.wavelength - start))
         stop_ind = np.argmin(np.abs(self.wavelength - stop))
 
-        # Slice relevant part of the arrays
-        sub_wavelength = self.wavelength[start_ind:stop_ind]
-        sub_flux = self.flux[start_ind:stop_ind]
-        sub_error = self.error[start_ind:stop_ind]
+        line = AbsorptionLineSystem(self,(start_ind,stop_ind))
 
-        #____________________________________________________________________________________________________
-        #isolate this given line and turn it into an absorption line object
+        #find 2803
+        z_low,z_high=((line.wavelength[0]-2796.354)/2796.354),((line.wavelength[-1]-2796.354)/2796.354)
 
-        # Find min flux index within the selected region
-        max_flux_ind = np.argmin(sub_flux)
+        start_ind = np.argmin(np.abs(self.wavelength - ((z_low+1)*2803.531)))
+        stop_ind = np.argmin(np.abs(self.wavelength - ((z_high+1)*2803.531)))
 
-        # Initialize left and right boundaries at max flux point
-        left = max_flux_ind
-        right = max_flux_ind
+        pair=((line,AbsorptionLineSystem(self,(start_ind,stop_ind))))
 
-        # Scan left until you get 2 consecutive flux > 1
-        while left > 1:
-            if sub_flux[left - 1] > 1 and sub_flux[left - 2] > 1:
-                break
-            left -= 1
 
-        # Scan right until you get 2 consecutive flux > 1
-        while right < len(sub_flux) - 2:
-            if sub_flux[right + 1] > 1 and sub_flux[right + 2] > 1:
-                break
-            right += 1
-
-        # Get final indices relative to full spectrum
-        final_start_ind = start_ind + left
-        final_stop_ind = start_ind + right + 1  # +1 to include the last point
-
-        guess_line = AbsorptionLineSystem(self,(start_ind,stop_ind))
-
-        #guess_line = AbsorptionLineSystem(self,(final_start_ind,final_stop_ind))
-
-        #____________________________________________________________________________________________________
-        #check around to see if its MgII 2796 or 2803
 
         filtered_rows = self.atomDB[self.atomDB['Transition'] == 'MgII']
         MgII_doublet=tuple(filtered_rows['Wavelength'])
         MgII_stregnths=tuple(filtered_rows['Strength'])
 
-        potential_matches=[]
+        pair[0].set_line_info('MgII',2796)
+        pair[0].z=(pair[0].peak-2796.354/2796.354)
+        pair[1].set_line_info('MgII',2803)
+        pair[1].z=pair[0].z
 
-        #if given line is 2796
-        suspected_z=(guess_line.peak-MgII_doublet[0])/MgII_doublet[0]
-        z_low,z_high=(guess_line.wavelength[0]-MgII_doublet[0])/MgII_doublet[0],(guess_line.wavelength[-1]-MgII_doublet[0])/MgII_doublet[0]
+        for thing in pair:
 
-        for absorption in self.absorptions:
-            peak_z=(absorption.peak-MgII_doublet[1])/MgII_doublet[1]
-            if (peak_z>=z_low and peak_z<=z_high):
-                if (guess_line.equivalent_width()>absorption.equivalent_width()):
-
-                    guess_line.suspected_line=MgII_doublet[0]
-                    guess_line.name=f"MgII {MgII_doublet}"
-                    guess_line.z=suspected_z
-                    guess_line.update_line_attributes()
-
-                    absorption.suspected_line=MgII_doublet[1]
-                    absorption.name=f"MgII {MgII_doublet}"
-                    absorption.z=suspected_z
-                    absorption.update_line_attributes()
-
-                    potential_matches.append((guess_line,absorption))
-
-        #and now if given line is 2803
-        suspected_z=(guess_line.peak-MgII_doublet[1])/MgII_doublet[1]
-        z_low,z_high=(guess_line.wavelength[0]-MgII_doublet[1])/MgII_doublet[1],(guess_line.wavelength[-1]-MgII_doublet[1])/MgII_doublet[1]
-
-        for absorption in self.absorptions:
-            peak_z=(absorption.peak-MgII_doublet[1])/MgII_doublet[1]
-            if (peak_z>=z_low and peak_z<=z_high):
-                if (guess_line.equivalent_width()<absorption.equivalent_width()):
-
-                    guess_line.suspected_line=MgII_doublet[1]
-                    guess_line.name=f"MgII {MgII_doublet}"
-                    guess_line.z=suspected_z
-                    guess_line.update_line_attributes()
-
-                    absorption.suspected_line=MgII_doublet[0]
-                    absorption.name=f"MgII {MgII_doublet}"
-                    absorption.z=suspected_z
-                    absorption.update_line_attributes()
-
-                    potential_matches.append((absorption,guess_line))
-
-        for pair in potential_matches:
-            pair[0].find_N()
-            pair[1].find_N()
-
-        matches = sorted(potential_matches, key=lambda pair: abs(pair[0].N - pair[1].N))
-
-        best_pair=matches[0]
+            thing.actual_ew_func()
+            
+            thing.calc_linear_n()
 
         #____________________________________________________________________________________________________
         #then make new absorber if it has a pair
 
-        custom_absorber=Absorber(best_pair[0].z,.1,best_pair)
+        custom_absorber=Absorber(pair[0].z,.1,pair)
 
 
         #____________________________________________________________________________________________________
         #then do the mgII search to find other elements
 
-        self.MgMatch(custom_absorber)
+        lines_to_find={
+            'FeII 2600':2600.1720322,
+            #'FeII 2586':2586.6492304,
+            #'FeII 2382':2382.7639122,
+            #'FeII 2374':2374.4599813,
+            #'FeII 2344':2344.2126822,
+            #'FeII 1608':1608.4509059,
+            'MgI 2852': 2852.96342,
+            'CaII 3934':3934.774716,
+            #'CaII 3969':3969.5897875
+        }
+
+        for key,value in lines_to_find.items():
+
+            
+            start_ind = np.argmin(np.abs(self.wavelength - ((z_low+1)*value)))
+            stop_ind = np.argmin(np.abs(self.wavelength - ((z_high+1)*value)))
+
+            new_absorbtion=AbsorptionLineSystem(self,(start_ind,stop_ind))
+            new_absorbtion.name=key
+            new_absorbtion.MgII_dimensions(z_low,z_high)
+            new_absorbtion.set_line_info(key.split(' ')[0],int(key.split(' ')[1]))
+
+            custom_absorber.add_line(key,new_absorbtion)
+
+        #save some data
+        #vel window
+        z_gal = 0.6582
+        lambda_0=2796.354
+
+
+        # Your wavelength window in Ångströms
+        lambda_min = pair[0].wavelength[0]
+        lambda_max = pair[0].wavelength[-1]
+
+        # Wavelength of the MgII line at the galaxy's redshift
+        lambda_gal = lambda_0 * (1 + z_gal)
+
+        # Convert to velocity relative to galaxy
+        v_min = c_kms * (lambda_min - lambda_gal) / lambda_gal
+        v_max = c_kms * (lambda_max - lambda_gal) / lambda_gal
+
+
+        # Create a dataframe
+        df = pd.DataFrame({
+            "z_gal": [z_gal],
+            "lambda_min": [lambda_min],
+            "lambda_max": [lambda_max],
+            "velocity_min_kms": [v_min],
+            "velocity_max_kms": [v_max]
+        })
+
+        for key,value in custom_absorber.lines.items():
+
+            ew,ew_error=value.actual_ew_func()
+
+            df[f"{key} EW"]=f"{ew} +- {ew_error}"
+
+
+
+        # Save to CSV
+        df.to_csv("absorber_data.csv", index=False)
+
+        
 
         #____________________________________________________________________________________________________
         #now make a flux plot and save custom absorption
@@ -1148,9 +1180,11 @@ class VPFit:
 
                     line.MgII_dimensions(z_low,z_high)
 
-                    i.add_line(f"{best[1]} {best[2]}",line)
+                    i.add_line(f"{best[1]} {best[2]}",AbsorptionLineSystem(self,()))
 
                     line.find_mcmc_microlines()
+
+                    line.z=i.z
 
                     #line.mcmc_microlines=self.optimizedMethod(line.MgII_wavelength,line.MgII_flux,line.MgII_errors,N=.5)
             
@@ -1549,7 +1583,7 @@ class VPFit:
         #self.ApertureMethod()
         self.optimizedMethod(N=2)
 
-        self.churchill_style_absorbers()
+        #self.churchill_style_absorbers()
 
         self.MgII_search()
 

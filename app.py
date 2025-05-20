@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, url_for, redirect, session,send_from_directory,jsonify
+from flask import Flask, render_template, request, url_for, redirect, session,send_from_directory,jsonify,json
 import pickle
 import base64
 import os
@@ -7,10 +7,11 @@ from flask import flash
 import numpy as np
 import multiprocessing
 from matplotlib.widgets import SpanSelector
+import math
 
 from VPFit import VPFit
 from TNG_trident import Sim_spectra
-from essential_functions import clear_directory,get_data
+from essential_functions import clear_directory,get_data,floor_to_wave
 from mcmc import run_mcmc,run_multi_mcmc,continue_mcmc,pre_mcmc,update_fit,mcmc
 from AbsorptionLine import AbsorptionLine,AbsorptionLineSystem
 
@@ -107,6 +108,51 @@ def index():
     session['selected_catalog'] = selected_catalog  # Store the selected catalog in session
     spectra_list = list_spectra(selected_catalog)
     return render_template('index.html', catalogs=catalogs, selected_catalog=selected_catalog, spectra=spectra_list)
+
+@app.route('/upload_combined', methods=['POST'])
+def upload_combined():
+    clean_house()
+
+    red_files = request.files.getlist('red_files')
+    blue_files = request.files.getlist('blue_files')
+    red_res = float(request.form.get('red_res', 7.5))
+    blue_res = float(request.form.get('blue_res', 7.5))
+    nmf_requested = 'nmf' in request.form
+
+    upload_dir = '/Users/jakereinheimer/Desktop/Fakhri/data/custom/'
+
+    def save_uploaded(files):
+        paths = []
+        for file in files:
+            if file and allowed_file(file.filename):
+                filename = secure_filename(file.filename)
+                filepath = os.path.join(upload_dir, filename)
+                file.save(filepath)
+                paths.append(filepath)
+        return paths
+
+    red_paths = save_uploaded(red_files)
+    blue_paths = save_uploaded(blue_files)
+
+    if nmf_requested:
+        name='nmf'
+    else:
+        name=''
+
+    vp = VPFit(
+        (red_paths, blue_paths, red_res, blue_res),
+        'combined',
+        name,
+        custom=True,
+    )
+
+    vp.DoAll()
+
+    save_object(vp, 'current_vp.pkl')
+    save_object({}, 'custom_absorptions.pkl')
+
+    return redirect(url_for('show_results'))
+
 
 @app.route('/upload_data', methods=['POST'])
 def upload_data():
@@ -274,8 +320,6 @@ def multi_mcmc():
     #try:
     absorber_index = int(request.form['absorber_index'])
     element_list = request.form.getlist('multi_mcmc_elements')
-    mcmc_steps = int(request.form.get('multi_mcmc_steps', 1000))
-    mcmc_walkers = int(request.form.get('multi_mcmc_walkers', 250))
 
     if absorber_index==100:
         absorber=load_object('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/Data/custom_absorber/custom_absorber.pkl')
@@ -298,8 +342,16 @@ def multi_mcmc():
 
         absorber = absorbers[absorber_index]
 
+    ref_z = request.form.get('ref_z')
+    if ref_z is None:
+        ref_z=absorber.z
+    else:
+        ref_z=float(ref_z)
+    save_object(ref_z,'static/Data/multi_mcmc/initial/ref_z.pkl')
+
     initial_guesses,line_dict=pre_mcmc(absorber,element_list)
 
+    #statuses
     num_params_per_line = 1 + 2 * len(element_list)
     param_list_2d = np.array(initial_guesses).reshape(-1, num_params_per_line)
 
@@ -327,6 +379,16 @@ def multi_mcmc():
             status_row.append(status)
         statuses.append(status_row)
 
+    #end statuses
+
+    velocity_data = {line.name: line.to_dict() for line in line_dict.values()}
+
+    velocity_data = {
+        f"{line.name.split()[0]} {int(math.floor(float(line.name.split()[1])))}": line.to_dict()
+        for line in line_dict.values()
+    }
+
+    save_object(velocity_data,'static/Data/multi_mcmc/initial/velocity_data.pkl')
     save_object(column_names,'static/Data/multi_mcmc/initial/column_names.pkl')
     save_object(param_list_2d,'static/Data/multi_mcmc/initial/initial_guesses.pkl')
     save_object(param_list_2d,'static/Data/multi_mcmc/initial/algo_guesses.pkl')
@@ -335,6 +397,7 @@ def multi_mcmc():
                            parameters=display_params,
                            statuses=statuses,
                            line_dict=line_dict,
+                           velocity_data=velocity_data,
                            column_names=column_names,
                            elements=element_list,
                            random=random()
@@ -351,6 +414,7 @@ def mcmc_param_update():
     num_rows=len(param_list_2d)
     num_cols=len(param_list_2d[0])
 
+    #statuses
     params = []
     statuses = []
 
@@ -372,11 +436,28 @@ def mcmc_param_update():
     print('statuses')
     print(statuses)
 
+
     element_list=load_object('static/Data/multi_mcmc/initial/initial_element_list.pkl')
     line_dict=load_object('static/Data/multi_mcmc/initial/initial_line_dict.pkl')
     column_names=load_object('static/Data/multi_mcmc/initial/column_names.pkl')
+
+    velocity_data=load_object('static/Data/multi_mcmc/initial/velocity_data.pkl')
     
     save_object(statuses,'static/Data/multi_mcmc/initial/initial_statuses.pkl')
+
+    masked_json = request.form.get("masked_regions")
+    if masked_json:
+        masked_regions = json.loads(masked_json)
+
+        real_masked_regions={}
+        for key,value in masked_regions.items():
+            new_name=floor_to_wave(key)
+            real_masked_regions[new_name]=value
+
+        print(real_masked_regions)
+            
+        save_object(real_masked_regions,"static/Data/multi_mcmc/initial/masked_regions.pkl")
+
 
     update_fit(params,element_list)
 
@@ -394,6 +475,7 @@ def mcmc_param_update():
                            parameters=display_params,
                            statuses=statuses,
                            line_dict=line_dict,
+                           velocity_data=velocity_data,
                            column_names=column_names,
                            elements=element_list,
                            random=random()
@@ -405,6 +487,7 @@ def actual_mcmc():
 
     params = load_object('static/Data/multi_mcmc/initial/initial_guesses.pkl')
     statuses = load_object('static/Data/multi_mcmc/initial/initial_statuses.pkl')
+
     mcmc_steps = int(request.form.get('mcmc_steps', 1000))
     mcmc_walkers = int(request.form.get('mcmc_walkers', 250))
 
@@ -516,6 +599,25 @@ def show_custom_results():
 
 @app.route('/continue_mcmc', methods=['POST'])
 def continued_mcmc():
+    display_params = load_object("static/Data/multi_mcmc/initial/initial_guesses.pkl")
+    statuses = load_object("static/Data/multi_mcmc/initial/initial_statuses.pkl")
+    line_dict = load_object("static/Data/multi_mcmc/initial/initial_line_dict.pkl")
+    velocity_data=load_object('static/Data/multi_mcmc/initial/velocity_data.pkl')
+    column_names = load_object('static/Data/multi_mcmc/initial/column_names.pkl')
+    elements = load_object("static/Data/multi_mcmc/initial/initial_element_list.pkl")
+
+    return render_template('pre_mcmc.html',
+                           parameters=display_params,
+                           statuses=statuses,
+                           line_dict=line_dict,
+                           velocity_data=velocity_data,
+                           column_names=column_names,
+                           elements=elements,
+                           )
+
+'''
+@app.route('/continue_mcmc', methods=['POST'])
+def continued_mcmc():
 
     mcmc_steps = int(request.form.get('continued_multi_mcmc_steps', 1000))
     mcmc_walkers = int(request.form.get('continued_multi_mcmc_walkers', 250))
@@ -542,7 +644,7 @@ def continued_mcmc():
                             trace_plot_url=url_for('static', filename='Data/multi_mcmc/final/mcmc_trace.png'),
                             corner_plot_url=url_for('static', filename='Data/multi_mcmc/final/mcmc_corner.png'),
                             mcmc_steps=mcmc_steps,
-                            mcmc_walkers=mcmc_walkers)
+                            mcmc_walkers=mcmc_walkers)'''
 
     
 

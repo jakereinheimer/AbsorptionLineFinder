@@ -56,6 +56,11 @@
             padding: 2px 5px;
             font-size: 10px;
         }
+
+        #plots-container > div {
+            margin-bottom: 10px;  /* Shrink vertical gap */
+        }
+
     </style>
     
 </head>
@@ -125,13 +130,128 @@
 <body>
 
     <div class="content-container">
-        <div class="image-container">
-            <img src="/static/Data/multi_mcmc/initial/initial_guesses.png" alt="Initial Guesses" width="50%">
-        </div>
+        <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+        <div id="plots-container"></div>
+
+        <script>
+        let selectedRegions = {};  // Dictionary to hold user-selected velocity regions
+
+        const lines = {{ velocity_data.keys() | list | tojson }}; 
+
+        // Flask must also send this JSON: {"line_name": {"velocity": [...], "flux": [...], "error": [...]}}
+        const velocityData = {{ velocity_data | tojson }};  // Dict from Flask backend
+
+        function createPlot(lineName, velocity, flux, error, model_velocity, model, model_chi) {
+            const traceFlux = {
+                x: velocity,
+                y: flux,
+                name: 'Flux',
+                type: 'scatter',
+                mode: 'lines',
+                line: { shape: 'hv' }  // 'hv' = horizontal-vertical (step plot)
+
+            };
+
+            const traceErr = {
+                x: velocity,
+                y: error,
+                mode: 'lines',
+                name: 'Error',
+                type: 'scatter',
+                line: { shape: 'hv' }  // 'hv' = horizontal-vertical (step plot)
+
+            };
+
+            const traceModel = {
+                x: model_velocity,
+                y: model,
+                mode: 'lines',
+                name: 'Model',
+                type: 'scatter',
+                line: { shape: 'hv' }  // 'hv' = horizontal-vertical (step plot)
+
+            };
+
+            const layout = {
+                dragmode: 'select',
+                xaxis: {range:[-200,200]
+                 },
+                yaxis: { title: 'Flux',
+                    range:[0,1.5]
+                 },
+                height: 300,
+                annotations: [
+                    {
+                        text: lineName,
+                        xref: 'paper', yref: 'paper',
+                        x: 0.98, y: 0.02,
+                        xanchor: 'right',
+                        yanchor: 'bottom',
+                        showarrow: false,
+                        font: {
+                            size: 14,
+                            color: 'gray'
+                            }
+                        },
+                        {
+                        text: model_chi,
+                        xref: 'paper', yref: 'paper',
+                        x: 0.98, y: 0.2,
+                        xanchor: 'right',
+                        yanchor: 'bottom',
+                        showarrow: false,
+                        font: {
+                            size: 14,
+                            color: 'gray'
+                            }
+                        }
+                    ]
+                };
+
+            const divId = `plot_${lineName.replace(/\s+/g, '_')}`;
+
+            const wrapper = document.createElement('div');
+            wrapper.style.border = '1px solid #ccc';
+            wrapper.style.padding = '5px';
+            wrapper.style.marginBottom = '1px';
+            wrapper.style.borderRadius = '8px';
+            wrapper.style.backgroundColor = '#fafafa';  // optional subtle background
+            wrapper.onmouseenter = () => wrapper.style.boxShadow = '0 0 5px #aaa';
+            wrapper.onmouseleave = () => wrapper.style.boxShadow = '';
+
+
+            const container = document.createElement('div');
+            container.id = divId;
+
+            wrapper.appendChild(container);
+            document.getElementById('plots-container').appendChild(wrapper);
+
+            Plotly.newPlot(divId, [traceFlux, traceErr, traceModel], layout);
+
+            document.getElementById(divId).on('plotly_selected', function(eventData) {
+            if (eventData && eventData.range && eventData.range.x) {
+                const xmin = eventData.range.x[0];
+                const xmax = eventData.range.x[1];
+                selectedRegions[lineName] = { xmin, xmax };
+            }
+        });
+        }
+
+        for (const [lineName, data] of Object.entries(velocityData)) {
+            createPlot(lineName, data.velocity, data.flux, data.errors,data.model_velocity,data.model,data.model_chi);
+        }
+
+        function attachMaskedRegions() {
+            const input = document.getElementById('masked_regions_input');
+            input.value = JSON.stringify(selectedRegions);
+        }
+
+        </script>
+
 
         <div class="table-container">
             <h1>Parameters</h1>
-            <form action="/mcmc_param_update" method="post">
+            <form action="/mcmc_param_update" method="post" onsubmit="attachMaskedRegions()">
                 <table>
                     <thead>
                         <tr>
@@ -150,7 +270,7 @@
                                     {% set j = loop.index0 %}
                                     <td id="cell_{{ i }}_{{ j }}">
 
-                                        
+
                                         <script>
                                             const status = "{{ statuses[i][j] }}";
                                             const cell = document.getElementById("cell_{{ i }}_{{ j }}");
@@ -220,6 +340,9 @@
                         </tbody>                        
                 </table>
                 <br>
+
+                <input type="hidden" id="masked_regions_input" name="masked_regions">
+
                 <input type="submit" value="Update">
             </form>
 
@@ -236,6 +359,7 @@
                 </select>
                 <button type="submit">❌ Delete</button>
             </form>
+            
 
             <form action="{{ url_for('actual_mcmc') }}" method="post">
 

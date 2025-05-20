@@ -28,6 +28,8 @@ c_As = 2.9979e18
 c_kms = 2.9979e5
 k = 1.38065e-16 # erg/K
 
+c_kms = 3e5
+
 AtomDB=read_atomDB()
 
 #helper functions
@@ -338,6 +340,14 @@ class AbsorptionLineSystem:
         self.flux = vpfit.flux[self.start_ind:self.end_ind]
         self.errors = vpfit.error[self.start_ind:self.end_ind]
 
+        '''        if isinstance(lines,tuple):
+
+            self.MgII_wavelength=self.wavelength
+            self.MgII_flux = self.flux
+            self.MgII_errors = self.errors
+
+            self.microLines=self.find_mcmc_microlines()'''
+
         padding=500
         self.extra_wavelength=vpfit.wavelength[self.start_ind-padding:self.end_ind+padding]
         self.extra_flux=vpfit.flux[self.start_ind-padding:self.end_ind+padding]
@@ -426,10 +436,21 @@ class AbsorptionLineSystem:
         self.MgII_flux = self.vpfit.flux[low_ind:high_ind]
         self.MgII_errors = self.vpfit.error[low_ind:high_ind]
 
+    def make_velocity(self,ref_z):
+
+        c_kms=299792.458
+
+        self.velocity= c_kms * (self.wavelength - ((1+ref_z)*self.suspected_line))/self.suspected_line
+        self.MgII_velocity= c_kms * (self.MgII_wavelength - ((1+ref_z)*self.suspected_line))/self.suspected_line
+        self.extra_velocity = c_kms * (self.extra_wavelength - ((1+ref_z)*self.suspected_line))/self.suspected_line
+
+        self.high_res_extra_velocity = np.linspace(self.extra_velocity[0],self.extra_velocity[-1],len(self.extra_velocity)*10)
+
     def give_data(self,start_z,stop_z):
 
         start_ind=np.argmin(np.abs(self.extra_wavelength-(1+start_z)*self.suspected_line))
         stop_ind=np.argmin(np.abs(self.extra_wavelength-(1+stop_z)*self.suspected_line))
+
 
         wavelength=self.extra_wavelength[start_ind:stop_ind]
         flux=self.extra_flux[start_ind:stop_ind]
@@ -437,15 +458,20 @@ class AbsorptionLineSystem:
 
         return wavelength,flux,errors
 
-    '''
-    def reset_later_params(self):
-        self.suspected_line=1
-        self.f=1
-        self.z=1
-        self.z_err=1
-        self.name=None
-        self.possible_lines=[]
-    '''
+    def to_dict(self):
+        
+        #reference_microline = (self.z + 1) * self.suspected_line
+        reference_microline = (.6582 + 1) * self.suspected_line
+        velocity = ((self.extra_wavelength - reference_microline) / reference_microline) * c_kms
+
+        return {
+            'velocity': velocity.tolist(),
+            'flux': self.extra_flux.tolist(),
+            'errors': self.extra_errors.tolist(),
+            'model_velocity':self.model_velocity.tolist(),
+            'model':self.model.tolist(),
+            'model_chi':f"chi2 = {self.model_chi:.2f}"
+        }
 
     def update_microlines(self):
         for microline in self.microLines:
@@ -571,9 +597,10 @@ class AbsorptionLineSystem:
 
         return N
     
-    def store_model(self,wave,model):
-        self.model_wavelength=wave
+    def store_model(self,wave,model,chi):
+        self.model_velocity=wave
         self.model=model
+        self.model_chi=chi
         
 
     def plotly_plot(self):
@@ -720,7 +747,16 @@ class AbsorptionLineSystem:
 
         self.mcmc_microlines=[]
 
-        peaks,_= find_peaks(1-self.MgII_flux,prominence=.1)
+        try:
+            wave=self.MgII_wavelength
+            flux=self.MgII_flux
+            error=self.MgII_errors
+        except:
+            wave=self.wavelength
+            flux=self.flux
+            error=self.errors
+
+        peaks,_= find_peaks(1-flux,prominence=.1)
 
         self.peaks=peaks
 
@@ -729,11 +765,11 @@ class AbsorptionLineSystem:
             right = peak_ind
             
             # Go left
-            while left > 0 and self.MgII_flux[left] <= self.MgII_flux[left - 1]:
+            while left > 0 and flux[left] <= flux[left - 1]:
                 left -= 1
             
             # Go right
-            while right < len(self.MgII_flux) - 1 and self.MgII_flux[right] <= self.MgII_flux[right + 1]:
+            while right < len(flux) - 1 and flux[right] <= flux[right + 1]:
                 right += 1
             
             # Convert to global indices
@@ -741,9 +777,9 @@ class AbsorptionLineSystem:
             global_right = right + self.start_ind
             
             # Extract data slices
-            wavelength_slice = self.MgII_wavelength[left:right+1]
-            flux_slice = self.MgII_flux[left:right+1]
-            error_slice = self.MgII_errors[left:right+1]
+            wavelength_slice = wave[left:right+1]
+            flux_slice = flux[left:right+1]
+            error_slice = error[left:right+1]
             
             # Create new microLine object (adjust according to your microLine class)
             #new_microline = deepcopy(self.microLines[0])  # Copy structure

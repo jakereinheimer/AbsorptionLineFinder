@@ -72,6 +72,27 @@
         {% endif %}
     </div>
 
+    <div>
+        <form action="/upload_combined" method="POST" enctype="multipart/form-data">
+            <label>Upload Red Data:</label>
+            <input type="file" name="red_files" multiple required><br><br>
+        
+            <label>Upload Blue Data:</label>
+            <input type="file" name="blue_files" multiple required><br><br>
+        
+            <label>Red Arm Resolution (FWHM):</label>
+            <input type="number" name="red_res" step="0.1" value="7.5" required><br><br>
+        
+            <label>Blue Arm Resolution (FWHM):</label>
+            <input type="number" name="blue_res" step="0.1" value="7.5" required><br><br>
+        
+            <input type="checkbox" name="nmf" value="true"> NMF?<br><br>
+        
+            <button type="submit">Upload and Analyze Combined</button>
+        </form>
+    </div>
+    
+
     <div class="container">
         <h1>or Upload Your Own Data</h1>
         <form action="/upload_data" method="POST" enctype="multipart/form-data">

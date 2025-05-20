@@ -295,6 +295,16 @@ def read_atomDB():
 
         return AtomDB
 
+AtomDB=read_atomDB()
+
+def floor_to_wave(name):
+
+    filtered_row=AtomDB[AtomDB['Floor']==(name.split(' ')[1].replace(' ','')) & AtomDB['Transition']==(name.split(' ')[0].replace(' ',''))]
+
+    new_name=f"{filtered_row['Transition']} {filtered_row['Wavelength']}"
+
+    return new_name
+
 def read_parameter(parameter_name):
     filename='parameters.txt'
     try:

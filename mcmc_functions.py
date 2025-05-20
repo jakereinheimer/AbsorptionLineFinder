@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from scipy.interpolate import interp1d
 from scipy.signal import convolve
+import pickle
 
 from essential_functions import read_parameter
 
@@ -13,6 +14,10 @@ c = 2.9979e10 # cm/s
 c_As = 2.9979e18
 c_kms = 2.9979e5
 k = 1.38065e-16 # erg/K
+
+def load_object(filename):
+    with open(filename, 'rb') as inp:  # Open the file in binary read mode
+        return pickle.load(inp)  # Return the unpickled object
 
 class mcmc_line:
     def __init__(self,example_line,elements,saturation_direction=None):
@@ -101,6 +106,193 @@ def redshift_to_velocity(redshift):
     # Converts redshift to velocity
     c = 299792.458  # Speed of light in km/s
     return c * ((1 + redshift)**2 - 1) / ((1 + redshift)**2 + 1)
+
+def build_full_chain(
+    sampler,
+    free_indices,
+    fixed_values,
+    anchor_map,
+    thermal_map,
+    nonthermal_set,
+    elements,
+    shape
+):
+    raw_chain = sampler.get_chain()  # (n_walkers, n_steps, n_free)
+    nwalkers, nsteps, nfree = raw_chain.shape
+    total_params = shape[0] * shape[1]
+
+    full_chain = np.zeros((nwalkers, nsteps, total_params))
+
+    for w in range(nwalkers):
+        full_chain[w] = rebuild_full_samples(
+            flat_samples=raw_chain[w],  # shape (n_steps, n_free)
+            free_indices=free_indices,
+            fixed_values=fixed_values,
+            anchor_map=anchor_map,
+            thermal_map=thermal_map,
+            nonthermal_set=nonthermal_set,
+            elements=elements,
+            shape=shape
+        )
+
+    return full_chain
+
+
+
+def plot_trace(full_chain, labels, save_path, threshold=1e-8):
+
+    n_walkers, n_steps, n_params = full_chain.shape
+
+    fig, axes = plt.subplots(n_params, figsize=(10, 3 * n_params), sharex=True)
+    if n_params == 1:
+        axes = [axes]
+
+    for i in range(n_params):
+        ax = axes[i]
+        for w in range(n_walkers):
+            ax.plot(full_chain[w, :, i], alpha=0.3, lw=0.7,c='black')
+        
+        std = np.std(full_chain[:, :, i])
+        if std < threshold:
+            mean_val = np.mean(full_chain[:, :, i])
+            ax.axhline(mean_val, color='red', linestyle='--', alpha=0.6)
+
+        ax.set_ylabel(labels[i])
+        ax.yaxis.set_label_coords(-0.1, 0.5)
+
+    axes[-1].set_xlabel("Step number")
+    plt.tight_layout(h_pad=0)
+    plt.savefig(save_path)
+    plt.clf()
+
+
+
+
+
+def plot_full_trace_all_walkers(
+    sampler,
+    free_indices,
+    fixed_values,
+    anchor_map,
+    thermal_map,
+    nonthermal_set,
+    elements,
+    shape,
+    labels,
+    save_path,
+    threshold=1e-8
+):
+    chain = sampler.get_chain()  # shape: (n_walkers, n_steps, n_free)
+    nwalkers, nsteps, nfree = chain.shape
+
+    full_chain = np.zeros((nwalkers, nsteps, shape[0] * shape[1]))
+
+    # Rebuild full chain
+    for w in range(nwalkers):
+        full_chain[w] = rebuild_full_samples(
+            chain[w], free_indices, fixed_values, anchor_map,
+            thermal_map, nonthermal_set, elements, shape
+        )
+
+    nparams = full_chain.shape[2]
+
+    fig, axes = plt.subplots(nparams, figsize=(10, 3 * nparams), sharex=True)
+    if nparams == 1:
+        axes = [axes]
+
+    for i in range(nparams):
+        ax = axes[i]
+        for w in range(nwalkers):
+            ax.plot(full_chain[w, :, i], alpha=0.3, lw=0.8,c='black')
+
+        if np.std(full_chain[:, :, i]) < threshold:
+            ax.axhline(np.mean(full_chain[:, :, i]), color='red', linestyle='--', alpha=0.6)
+
+        ax.set_ylabel(labels[i])
+        ax.yaxis.set_label_coords(-0.1, 0.5)
+
+    axes[-1].set_xlabel("Step number")
+    plt.tight_layout(h_pad=0)
+    plt.savefig(save_path)
+    plt.clf()
+
+
+
+def rebuild_full_samples(
+    flat_samples,
+    free_indices,
+    fixed_values,
+    anchor_map,
+    thermal_map,
+    nonthermal_set,
+    elements,
+    shape
+):
+
+    n_samples = flat_samples.shape[0]
+    n_rows, n_cols = shape
+    total_params = n_rows * n_cols
+    full_samples = np.zeros((n_samples, total_params))
+
+    # --- Step 1: Fill fixed values ---
+    for (i, j), val in fixed_values.items():
+        flat_index = i * n_cols + j
+        full_samples[:, flat_index] = val
+
+    # --- Step 2: Fill free values ---
+    for k, (i, j) in enumerate(free_indices):
+        flat_index = i * n_cols + j
+        full_samples[:, flat_index] = flat_samples[:, k]
+
+    # --- Step 3: Fill anchored parameters ---
+    for (i, j), (ti, tj) in anchor_map.items():
+        src_index = ti * n_cols + tj
+        dest_index = i * n_cols + j
+        full_samples[:, dest_index] = full_samples[:, src_index]
+
+    # --- Step 4: Fill thermal parameters ---
+    def read_atomic_mass(element):
+        masses = {
+            'H': 1.0079, 'He': 4.0026, 'C': 12.011, 'N': 14.007, 'O': 15.999,
+            'Mg': 24.305, 'Si': 28.085, 'Fe': 55.845, 'Zn': 65.38
+        }
+        return masses.get(element, 28.0)
+
+    for (i, j), ref_element in thermal_map.items():
+        target_element_index = (j - 1) // 2
+        target_element = elements[target_element_index]
+
+        ref_index = elements.index(ref_element)
+        ref_b_col = 1 + 2 * ref_index + 1
+        ref_flat_index = i * n_cols + ref_b_col
+
+        target_flat_index = i * n_cols + j
+
+        ref_mass = read_atomic_mass(ref_element[:2])
+        target_mass = read_atomic_mass(target_element[:2])
+        scale_factor = 1 / np.sqrt(target_mass / ref_mass)
+
+        full_samples[:, target_flat_index] = full_samples[:, ref_flat_index] * scale_factor
+
+    # --- Step 5: Fill non-thermal parameters (shared b values) ---
+    for i in range(n_rows):
+        b_indices = [j for (ii, j) in nonthermal_set if ii == i]
+        if not b_indices:
+            continue
+        try:
+            mgii_index = elements.index("MgII")
+            mgii_b_col = 1 + 2 * mgii_index + 1
+        except ValueError:
+            mgii_b_col = b_indices[0]  # fallback
+
+        ref_flat_index = i * n_cols + mgii_b_col
+
+        for j in b_indices:
+            dest_flat_index = i * n_cols + j
+            full_samples[:, dest_flat_index] = full_samples[:, ref_flat_index]
+
+    return full_samples
+
 
 def parse_statuses(statuses, initial_guesses):
     free_indices = []
@@ -324,9 +516,13 @@ def summarize_params(flat_samples, labels, elements, mcmc_lines, file_name):
     summary = []
     params_per_microline = (2 * len(elements)) + 1
 
+    c_kms = 299792.458
+    ref_z=load_object('static/Data/multi_mcmc/initial/ref_z.pkl')
+
     reference_line_ind = 0
     ref_param_block = flat_samples[:, reference_line_ind * params_per_microline:(reference_line_ind + 1) * params_per_microline]
     ref_vel_p16, ref_vel_p50, ref_vel_p84 = np.percentile(ref_param_block[:, 0], [16, 50, 84])
+
 
     for i, mcmc_line_obj in enumerate(mcmc_lines):
         param_block = flat_samples[:, i * params_per_microline:(i + 1) * params_per_microline]
@@ -334,7 +530,7 @@ def summarize_params(flat_samples, labels, elements, mcmc_lines, file_name):
         # Velocity
         vel_samples = param_block[:, 0]
         vel_p16, vel_p50, vel_p84 = np.percentile(vel_samples, [16, 50, 84])
-        rel_median = vel_p50 - ref_vel_p50
+        rel_median = vel_p50 - redshift_to_velocity(ref_z)
         rel_low = vel_p50 - vel_p16
         rel_high = vel_p84 - vel_p50
 
@@ -355,8 +551,8 @@ def summarize_params(flat_samples, labels, elements, mcmc_lines, file_name):
                 'Component': i + 1,
                 'Species': f"{element}",
                 f'dv_c (km/s)': f"{rel_median:.1f} (+{rel_high:.2f}/-{rel_low:.2f})",
-                f'log N': f"{logN_p50:.2f} (+{logN_high:.2f}/-{logN_low:.2f}) ; ifsat ({np.percentile(logN_samples, 5):.2f})",
-                f'b (km/s)': f"{b_p50:.1f} (+{b_high:.1f}/-{b_low:.1f}) ; ifsat ({np.percentile(b_samples, 95):.1f})"
+                f'log N': f"{logN_p50:.2f} (+{logN_high:.2f}/-{logN_low:.2f}) ; ifsat ({np.percentile(logN_samples, 5):.2f}) ; ifnodetect ({np.percentile(logN_samples, 95):.2f})",
+                f'b (km/s)': f"{b_p50:.1f} (+{b_high:.1f}/-{b_low:.1f}) ; ifsat ({np.percentile(b_samples, 95):.1f}) ; ifnodetect ({np.percentile(b_samples, 95):.1f})"
             })
 
     df = pd.DataFrame(summary)
