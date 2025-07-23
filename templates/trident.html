@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TNG Galaxy</title>
+</head>
+<body>
+    <h1>TNG Galaxy</h1>
+
+
+<!-- Display the selected velocity plot -->
+<h1> Plots: </h1>
+
+<!-- x plot -->
+<img src="{{ x_plot_url }}" alt="X Plot" width="30%" />
+
+<!-- y plot -->
+<img src="{{ y_plot_url }}" alt="Y Plot" width="30%" />
+
+<!-- z plot -->
+<img src="{{ z_plot_url }}" alt="Z Plot" width="30%" />
+
+<!-- ang momentum plot -->
+<img src="{{ plot_url }}" alt="Angular Momentum Plot" width="100%" />
+
+<h2>Please choose the ray location</h2>
+
+<form action="/trident_results1" method="POST">
+    <h1>Radius 1:</h1>
+    <input type="number" name="d_ray1" id="d_ray1" required>
+
+    <h1>Theta 1:</h1>
+    <input type="number" name="theta_ray1" id="theta_ray1" required>
+
+    <h1>Radius 2:</h1>
+    <input type="number" name="d_ray2" id="d_ray2" required>
+
+    <h1>Theta 2:</h1>
+    <input type="number" name="theta_ray2" id="theta_ray2" required>
+
+    <button type="submit">Submit</button>
+</form>
+
+<p><a href="/trident_results_random">Or do Random!</a></p>
+
+<!-- Link to go back and select another spectrum -->
+<p><a href="/">Go Back to Select Another Spectrum</a></p>
+</body>
+</html>

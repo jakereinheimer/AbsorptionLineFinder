@@ -1,0 +1,7 @@
+conda activate
+
+source myvenv/bin/activate
+
+deactivate
+
+conda activate

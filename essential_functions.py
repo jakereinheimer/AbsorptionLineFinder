@@ -206,15 +206,20 @@ from astropy.io import fits
 def get_custom_data(file_list, nmf=False):
     # Handle if loc is a directory
 
+    print('file list')
+    print(file_list)
+
     wavelength = flux = error = None
 
     if len(file_list)>1:
 
         for fname in file_list:
-            if fname.endswith('.fits'):
+            if (fname.endswith('.fits') or fname.endswith('.fit')):
                 if 'wav' in fname:
                     with fits.open(fname) as hdul:
                         wavelength = np.array(hdul[0].data)
+                        print('wave')
+                        print(wavelength)
 
                 if 'flx' in fname:
                     with fits.open(fname) as hdul:
@@ -291,6 +296,12 @@ def read_atomDB():
 
         AtomDB = pd.read_csv(atom_loc, sep=',', engine='python', header=None, names=['Transition', 'Wavelength', 'Strength', 'Tau'])
 
+        # Strip whitespace from Transition column
+        AtomDB['Transition'] = AtomDB['Transition'].astype(str).str.strip()
+
+        # Convert Wavelength to float (if not already)
+        AtomDB['Wavelength'] = AtomDB['Wavelength'].astype(float)
+
         AtomDB['Floor'] = np.floor(AtomDB['Wavelength'].astype(float)).astype(int)
 
         return AtomDB
@@ -298,12 +309,19 @@ def read_atomDB():
 AtomDB=read_atomDB()
 
 def floor_to_wave(name):
+    floor = int(name.split(' ')[1].strip())
+    transition = name.split(' ')[0].strip()
 
-    filtered_row=AtomDB[AtomDB['Floor']==(name.split(' ')[1].replace(' ','')) & AtomDB['Transition']==(name.split(' ')[0].replace(' ',''))]
+    filtered_row = AtomDB[(AtomDB['Floor'] == floor) & (AtomDB['Transition'] == transition)]
 
-    new_name=f"{filtered_row['Transition']} {filtered_row['Wavelength']}"
+    if filtered_row.empty:
+        return None  # or raise an error, depending on what you want
 
+    # Get the first row's values
+    new_name = f"{filtered_row.iloc[0]['Transition']} {filtered_row.iloc[0]['Wavelength']}"
+    
     return new_name
+
 
 def read_parameter(parameter_name):
     filename='parameters.txt'

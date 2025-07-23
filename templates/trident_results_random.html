@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spectral Analysis Result</title>
+</head>
+<body>
+    <h1>Spectral Analysis Result</h1>
+    
+    <!-- spectrum for 1st ray -->
+    <iframe src="{{ url_for('static', filename='Trident/Trident_spectrum/FluxPlot_0.html') }}" width="100%" height="600px" frameborder="0"></iframe>
+
+    <!-- spectrum for 2nd ray -->
+    <iframe src="{{ url_for('static', filename='Trident/Trident_spectrum/FluxPlot_1.html') }}" width="100%" height="600px" frameborder="0"></iframe>
+
+<!-- Display the selected velocity plot -->
+<h2>Ray Plot:</h2>
+<img src="{{plot_url}}" alt="Ray Plot" width="100%" />
+
+<!-- Link to go back and select another spectrum -->
+<p><a href="/">Go Back to Select Another Spectrum</a></p>
+</body>
+</html>

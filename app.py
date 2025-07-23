@@ -8,12 +8,16 @@ import numpy as np
 import multiprocessing
 from matplotlib.widgets import SpanSelector
 import math
+import matplotlib.pyplot as plt
+import pandas as pd
 
 from VPFit import VPFit
 from TNG_trident import Sim_spectra
-from essential_functions import clear_directory,get_data,floor_to_wave
-from mcmc import run_mcmc,run_multi_mcmc,continue_mcmc,pre_mcmc,update_fit,mcmc
-from AbsorptionLine import AbsorptionLine,AbsorptionLineSystem
+from essential_functions import clear_directory,get_data,floor_to_wave,read_atomDB
+from mcmc import pre_mcmc,update_fit,mcmc, plot_fits
+from AbsorptionLine import AbsorptionLineSystem
+
+AtomDB=read_atomDB()
 
 #helper functions
 def save_object(obj, filename):
@@ -117,6 +121,8 @@ def upload_combined():
     blue_files = request.files.getlist('blue_files')
     red_res = float(request.form.get('red_res', 7.5))
     blue_res = float(request.form.get('blue_res', 7.5))
+    object_name=request.form.get('object_name',' ')
+    save_object(object_name,'object_name.pkl')
     nmf_requested = 'nmf' in request.form
 
     upload_dir = '/Users/jakereinheimer/Desktop/Fakhri/data/custom/'
@@ -132,7 +138,13 @@ def upload_combined():
         return paths
 
     red_paths = save_uploaded(red_files)
+    if len(red_paths)==0:
+        red_paths=None
+    
     blue_paths = save_uploaded(blue_files)
+    if len(blue_paths)==0:
+        blue_paths=None
+
 
     if nmf_requested:
         name='nmf'
@@ -152,6 +164,825 @@ def upload_combined():
     save_object({}, 'custom_absorptions.pkl')
 
     return redirect(url_for('show_results'))
+
+@app.route('/view_plot',methods=['POST'])
+def view_plots():
+
+    '''
+    I want the user to select a folder and enter in a z value, and this will spit out all of the views and do MgII, FeII, and MgI
+    '''
+
+    clear_directory('/Users/jakereinheimer/Desktop/Fakhri/VPFit/viewplot_upload/user_upload')
+
+    uploaded_files = request.files.getlist("object_dir")
+    galaxy_z = float(request.form.get("GalZ"))
+
+    save_dir = os.path.join("viewplot_upload", "user_upload")
+    os.makedirs(save_dir, exist_ok=True)
+
+    #upload and save the files
+    file_paths = []
+    for file in uploaded_files:
+        filename = file.filename[file.filename.find('/')+1:-1]  # includes the relative path from the selected folder
+        if 'DS_Stor' in filename:
+            continue
+        filepath = os.path.join(save_dir, filename)
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        file.save(filepath)
+        file_paths.append(filepath)
+
+    #go through the LOSs and creates vpfit objects
+    vpfits=[]
+    vpfits_names=[]
+    for los in os.listdir(save_dir):
+
+        los_dir=os.path.join(save_dir,los)
+        
+        blue_dir=os.path.join(los_dir,'b')
+        red_dir=os.path.join(los_dir,'r')
+
+        os.makedirs(blue_dir,exist_ok=True)
+        os.makedirs(red_dir,exist_ok=True)
+
+        red_paths_=os.listdir(red_dir)
+        blue_paths_=os.listdir(blue_dir)
+
+        red_paths=[os.path.join(red_dir,path) for path in red_paths_]
+        blue_paths=[os.path.join(blue_dir,path) for path in blue_paths_]
+
+        if len(red_paths)==0:
+            red_paths=None
+
+        if len(blue_paths)==0:
+            blue_paths=None
+
+        vp = VPFit(
+        (red_paths, blue_paths, 10, 10),
+        'combined',
+        los,
+        custom=True,
+        )
+
+        vpfits.append(vp)
+        vpfits_names.append(los)
+
+
+    #now to create the plot
+    species=vpfits[0].view_plot_data(galaxy_z).keys()
+    fig, axs = plt.subplots(len(species), len(vpfits), figsize=(15, 8 * len(vpfits)), squeeze=True,sharex=True,sharey=True)
+
+    for i,los in enumerate(vpfits):
+
+        view_data=los.view_plot_data(galaxy_z)
+
+        axs[0, i].set_title(str(vpfits_names[i]))
+
+        for j,species in enumerate(view_data.keys()):
+
+            ax=axs[j,i]
+            ax.set_ylim(0,2)
+
+            data=view_data.get(species)
+            
+            #flux
+            ax.step(data[0], data[1], where='mid', label=f"Flux", color="black")
+            #error
+            ax.step(data[0], data[2], where='mid', label=f"Flux", color="cyan")
+
+            #big red line
+            ax.axvline(0,color='red')
+
+            if i==0:
+                ax.text(0.05, 0.2, f"{species}", transform=ax.transAxes,fontsize=8)
+
+    plt.subplots_adjust(hspace=0,wspace=0)
+    plt.savefig(f"viewplot.png")
+
+    return index()
+
+@app.route('/chain_upload',methods=['POST'])
+def chain_upload():
+    import os
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import corner
+
+    def gelman_rubin(chains):  # chains: shape (n_steps, n_walkers)
+        """
+        Computes the Gelman-Rubin R̂ statistic for a single parameter across walkers.
+        """
+        m = chains.shape[1]  # number of chains (walkers)
+        n = chains.shape[0]  # samples per chain
+
+        chain_means = np.mean(chains, axis=0)
+        chain_vars = np.var(chains, axis=0, ddof=1)
+        grand_mean = np.mean(chain_means)
+
+        # Between-chain variance
+        B = n * np.var(chain_means, ddof=1)
+
+        # Within-chain variance
+        W = np.mean(chain_vars)
+
+        # Estimated variance of the target distribution
+        var_hat = (1 - 1/n) * W + (1/n) * B
+
+        R_hat = np.sqrt(var_hat / W)
+        return R_hat
+
+    try:
+        clear_directory('/Users/jakereinheimer/Desktop/Fakhri/VPFit/chain_upload/user_upload')
+        clear_directory('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/chain_review/trace')
+        clear_directory('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/chain_review/triangle')
+    except:
+        pass
+
+    uploaded_files = request.files.getlist("object_dir")
+
+    object_name=request.form.get('object_name',' ')
+    save_object(object_name,'object_name.pkl')
+
+    save_dir = os.path.join("chain_upload", "user_upload")
+    os.makedirs(save_dir, exist_ok=True)
+
+    #upload and save the files
+    file_paths = []
+    for file in uploaded_files:
+        filename = file.filename[file.filename.find('/')+1:]  # includes the relative path from the selected folder
+        if 'DS_Stor' in filename:
+            continue
+        filepath = os.path.join(save_dir, filename)
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        file.save(filepath)
+        file_paths.append(filepath)
+
+    chain=np.load(os.path.join(save_dir,"chain.npy"))
+    mcmc_lines=load_object(os.path.join(save_dir,'final/mcmc_lines.pkl'))
+    line_dict=load_object(os.path.join(save_dir,'final/line_dict.pkl'))
+    params = load_object(os.path.join(save_dir,'final/initial_guesses.pkl'))
+    elements = load_object(os.path.join(save_dir,'initial/initial_element_list.pkl'))
+    num_params_per_line = 1 + 2 * len(elements)
+    params = np.array(params).reshape(-1, num_params_per_line)
+    statuses = np.array(load_object(os.path.join(save_dir,'initial/initial_statuses.pkl')))
+    column_names=load_object(os.path.join(save_dir,'initial/column_names.pkl'))
+
+    # chain: shape (steps, walkers, parameters)
+    flattened = chain.reshape(-1, chain.shape[-1])  # shape: (10100*250, 10)
+    median_params = np.median(flattened, axis=0)
+    plot_fits(median_params,line_dict,elements,mcmc_lines,'initial_fit_plot',chain_review=True)
+
+    all_summary_tables=[]
+    n_components = chain.shape[-1] // num_params_per_line
+
+    marginalized_flags = {}
+
+    for comp_idx in range(n_components):
+        start = comp_idx * num_params_per_line
+        end = (comp_idx + 1) * num_params_per_line
+        comp_chain = chain[:, :, start:end]
+
+        comp_chain_flat = comp_chain.reshape(-1, comp_chain.shape[-1])
+
+        # --- TRACE PLOTS ---
+        fig, axs = plt.subplots(num_params_per_line, figsize=(10, 2 * num_params_per_line), sharex=True)
+        for j in range(num_params_per_line):
+            
+            axs[j].plot(flattened[:, j], alpha=0.5, lw=0.3)
+
+            param_chain = comp_chain[:, :, j]
+            r_hat = gelman_rubin(param_chain)
+            axs[j].text(0.02,0.02,f"R = {r_hat:.3f}", transform=axs[j].transAxes)
+
+            axs[j].set_ylabel(f'{column_names[j]} ({statuses[comp_idx,j]})')
+
+        axs[-1].set_xlabel("Step")
+        fig.suptitle(f"Component {comp_idx + 1} Trace")
+        trace_path = os.path.join('static/chain_review/trace', f"trace_component_{comp_idx}.png")
+        fig.tight_layout()
+        fig.savefig(trace_path)
+        plt.close(fig)
+
+        # --- CORNER PLOT ---
+        comp_chain_flat = comp_chain.reshape(-1, comp_chain.shape[-1])
+        fig = corner.corner(
+            comp_chain_flat,
+            labels=[f'{column_names[j]} ({statuses[comp_idx,j]})' for j in range(num_params_per_line)],
+            quantiles=[0.16, 0.5, 0.84],
+            show_titles=True,
+            title_kwargs={"fontsize": 12}
+        )
+
+        corner_path = os.path.join('static/chain_review/triangle', f"triangle_component_{comp_idx}.png")
+        fig.savefig(corner_path)
+        plt.close(fig)
+
+        # --- Summary table ---
+        summary_table = []
+
+        for j in range(num_params_per_line):
+            samples = comp_chain_flat[:, j]
+
+            #calc ew for relevant line
+            parameter=column_names[j]
+            if parameter!='Velocity':
+
+                print(parameter)
+                print('line dict')
+                print(line_dict)
+                
+                if "MgII" in parameter:
+                    line=line_dict.get('MgII 2796.355099')
+                elif "FeII" in parameter:
+                    line=line_dict.get('FeII 2600.1720322')
+                    if line==None:
+                        line=line_dict.get('FeII 2586.6492304')
+                        if line == None:
+                            line=line_dict.get('FeII 2382.7639122')
+                elif "CaII" in parameter:
+                    line=line_dict.get('CaII 3934.774716')
+                elif "MgI" in parameter:
+                    line=line_dict.get('MgI 2852.96342')
+
+                vmin,vmax = mcmc_lines[comp_idx].vel_range
+
+                mask = (line.velocity >= vmin) & (line.velocity <= vmax)
+                if not np.any(mask):
+                    return None  # no valid region
+
+                lam = line.wavelength[mask]
+                f = line.flux[mask]
+                f_err = line.errors[mask]  # Make sure this exists
+
+                # Compute Δλ for each bin
+                dlam = np.gradient(lam)
+
+                # Compute equivalent width
+                ew = np.sum((1 - f) * dlam)
+
+                # Compute error on EW
+                ew_err = np.sqrt(np.sum((dlam * f_err) ** 2))
+
+
+                #calc N from ew
+                wave_cm = line.suspected_line*1e-8
+                f=line.f
+                m_e = 9.109 * 10**(-28)  # electron mass in grams
+                c = 2.998 * 10**10       # speed of light in cm/s
+                e = 4.8 * 10**(-10)
+
+                # Conversion constant
+                K = (wave_cm**2 / c**2) * (np.pi * e**2 / m_e) * f * 1e8
+
+                # EW and its uncertainty
+                # Assume you already have ew and ew_err from previous step
+                N = ew / K
+                N_err = ew_err / K
+
+                # Logarithmic column density and uncertainty
+                logN = np.log10(N)
+                logN_err = N_err / (N * np.log(10))
+
+                eq_width = f"{ew:.3f} +/- {ew_err:.3f}"
+                logN_from_EW = f"{logN:.3f} +/- {logN_err:.3f}"
+
+            else:
+                eq_width = None
+                logN_from_EW = None
+            
+
+            median = np.percentile(samples, 50)
+            low = np.percentile(samples, 16)
+            high = np.percentile(samples, 84)
+            #map_val = samples[np.argmax(np.histogram(samples, bins=100)[0])]
+            p95 = np.percentile(samples, 95)
+            p5 = np.percentile(samples, 5)
+
+            summary_table.append({
+                "param": column_names[j],
+                "median": f"{median:.3f} ± {high - median:.3f}/{median - low:.3f}",
+                #"map": f"{map_val:.3f}",
+                "p95": f"{p95:.3f}",
+                "p5": f"{p5:.3f}",
+                "ew": eq_width,
+                "logN": logN_from_EW
+            })
+        all_summary_tables.append(summary_table)
+
+    save_object(all_summary_tables,'static/chain_review/summary_tables.pkl')
+
+    return render_template(
+    "chain_review.html",
+    n_components=n_components,
+    summary_tables=all_summary_tables,
+    elements=elements,
+    marginalized_flags=marginalized_flags
+    )
+
+
+@app.route('/marginalize_component/<int:component_index>', methods=['POST'])
+def marginalize_component(component_index):
+    import numpy as np
+    import os
+    import matplotlib.pyplot as plt
+    import corner
+
+    selected_element = request.form.get("reference_element", None)
+
+    summary_path = 'static/chain_review/summary_tables.pkl'
+    chain_path = 'chain_upload/user_upload/chain.npy'
+    column_path = 'chain_upload/user_upload/initial/column_names.pkl'
+    status_path = 'chain_upload/user_upload/initial/initial_statuses.pkl'
+    element_path = 'chain_upload/user_upload/initial/initial_element_list.pkl'
+    marg_path = 'chain_upload/user_upload/marginalized_flags.pkl'
+
+    chain = np.load(chain_path)
+    summary_tables = load_object(summary_path)
+    column_names = load_object(column_path)
+    statuses = np.array(load_object(status_path))
+    elements = load_object(element_path)
+
+    element_masses = {
+        'HI': 1.0079, 'MgII': 24.305, 'FeII': 55.845, 'MgI': 24.305,
+        'CIV': 12.011, 'SiII': 28.0855, 'OVI': 15.999, 'CaII': 40.078
+        # Add any others if neccesary 
+    }
+
+    num_params_per_line = (chain.shape[-1]) // len(summary_tables)
+    start = component_index * num_params_per_line
+    end = (component_index + 1) * num_params_per_line
+
+    comp_chain = chain[:, :, start:end].reshape(-1, num_params_per_line)
+
+    element_b_indices = {el: j for j, name in enumerate(column_names[start:end]) if name.startswith(f"b ") for el in elements if el in name}
+
+    if selected_element and selected_element in element_b_indices:
+        ref_el = selected_element
+        ref_idx = element_b_indices[ref_el]
+    else:
+        ref_el, ref_idx = sorted(element_b_indices.items(), key=lambda x: element_masses.get(x[0], 999))[0]
+
+    b_ref_vals = comp_chain[:, ref_idx]
+    b_ref_min = np.percentile(b_ref_vals,5)
+
+    b_floors = {}
+    for el, idx in element_b_indices.items():
+        if el == ref_el:
+            b_floors[idx] = 0.0#b_ref_min
+        else:
+            m_ratio = np.sqrt(element_masses.get(ref_el, 1.0) / element_masses.get(el, 1.0))
+            b_floors[idx] = b_ref_min * m_ratio
+
+    # Step 3: Apply masking
+    mask = np.ones(comp_chain.shape[0], dtype=bool)
+    for idx, floor in b_floors.items():
+        mask &= comp_chain[:, idx] >= floor
+
+    comp_chain = comp_chain[mask]
+
+    # Save updated full chain with this component replaced
+    full_chain = np.load(chain_path)
+    comp_chain_full = full_chain[:, :, start:end].reshape(-1, num_params_per_line)
+    comp_chain_full = comp_chain_full[mask]
+    full_chain_flat = full_chain.reshape(-1, full_chain.shape[-1])
+    full_chain_flat[:, start:end] = comp_chain
+    updated_chain = full_chain_flat.reshape(full_chain.shape)
+    np.save(chain_path, updated_chain)
+
+    # Save just the reference b_floor for plotting
+    try:
+        marginalized_flags = load_object(marg_path)
+    except FileNotFoundError:
+        marginalized_flags = {}
+
+    marginalized_flags[component_index] = {
+    "b_floor": float(b_ref_min),
+    "reference_element": ref_el
+    }
+
+    save_object(marginalized_flags, marg_path)
+
+    # Regenerate trace plot
+    fig, axs = plt.subplots(num_params_per_line, figsize=(10, 2 * num_params_per_line), sharex=True)
+    for j in range(num_params_per_line):
+        axs[j].plot(comp_chain[:, j], alpha=0.5, lw=0.3)
+        axs[j].set_ylabel(f'{column_names[start + j]} ({statuses[component_index, j]})')
+        if j in b_floors:
+            axs[j].axhline(b_floors[j], color='red', linestyle='--')
+    axs[-1].set_xlabel("Step")
+    fig.suptitle(f"Component {component_index + 1} Trace")
+    trace_path = os.path.join('static/chain_review/trace', f"trace_component_{component_index}.png")
+    fig.tight_layout()
+    fig.savefig(trace_path)
+    plt.close(fig)
+
+    # Regenerate corner plot
+    fig = corner.corner(
+        comp_chain,
+        labels=[f'{column_names[start + j]} ({statuses[component_index,j]})' for j in range(num_params_per_line)],
+        quantiles=[0.16, 0.5, 0.84],
+        show_titles=True,
+        title_kwargs={"fontsize": 12}
+    )
+    axes = np.array(fig.axes).reshape((num_params_per_line, num_params_per_line))
+    for i in range(num_params_per_line):
+        if i in b_floors:
+            ax = axes[i, i]
+            ax.axvline(b_floors[i], color='red', linestyle='--', linewidth=1)
+    corner_path = os.path.join('static/chain_review/triangle', f"triangle_component_{component_index}.png")
+    fig.savefig(corner_path)
+    plt.close(fig)
+
+    # Update summary
+    summary = []
+    for j in range(num_params_per_line):
+        samples = comp_chain[:, j]
+        median = np.percentile(samples, 50)
+        low = np.percentile(samples, 16)
+        high = np.percentile(samples, 84)
+        p95 = np.percentile(samples, 95)
+        p5 = np.percentile(samples, 5)
+        summary.append({
+            "param": column_names[start + j],
+            "median": f"{median:.3f} ± {high - median:.3f}/{median - low:.3f}",
+            "p95": f"{p95:.3f}",
+            "p5": f"{p5:.3f}",
+            "ew": summary_tables[component_index][j].get("ew"),
+            "logN": summary_tables[component_index][j].get("logN")
+        })
+
+    summary_tables[component_index] = summary
+    save_object(summary_tables, summary_path)
+
+    return render_template(
+        "chain_review.html",
+        n_components=len(summary_tables),
+        summary_tables=summary_tables,
+        elements=elements,
+        marginalized_flags=marginalized_flags
+    )
+
+
+
+@app.route('/generate_csv', methods=['POST'])
+def generate_csv():
+
+    import os
+    from flask import request, render_template
+    import pandas as pd
+    import numpy as np
+    import re
+
+    flags = request.form.to_dict()
+
+    summary_tables = load_object('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/chain_review/summary_tables.pkl')
+    save_dir = os.path.join("chain_upload", "user_upload")
+    elements = load_object(os.path.join(save_dir, 'initial/initial_element_list.pkl'))
+    line_dict = load_object(os.path.join(save_dir,'final/line_dict.pkl'))
+    n_components = len(summary_tables)
+
+    our_2796=line_dict.get('MgII 2796.355099')
+    ref_z=load_object(os.path.join(save_dir,'initial/ref_z.pkl'))
+
+    # Convert to velocity relative to galaxy
+    vmin = our_2796.velocity[0]
+    vmax = our_2796.velocity[-1]
+
+
+    # Create a list of rows, starting with metadata
+    rows = [{
+        "Object Name" : str(load_object('object_name.pkl')),
+        "Galaxy Z": ref_z,
+        "Integration Window": (int(vmin), int(vmax)),
+    }]
+
+
+    for key,value in line_dict.items():
+
+        ew,ew_error=value.actual_ew_func()
+
+        rows[0][f"{key.split(' ')[0]} {int(np.floor(float(key.split(' ')[1].strip())))} EW"]=f"{(1000*ew):.2f} +- {(1000*ew_error):.2f}"
+
+    for i in range(n_components):
+        if i==0:
+            row=rows[0]
+        else:
+            row = {}
+
+        row['Component'] = i + 1
+
+        # Velocity
+        velocity = {row_['param']: row_ for row_ in summary_tables[i] if row_['param'] == 'Velocity'}
+        row['Velocity (km/s)'] = velocity.get('Velocity', {}).get('median', '---')
+
+        for element in elements:
+            flag = flags.get(f"flag_component_{i}_{element}", "detected")  # default to 'detected'
+            params = {row_['param']: row_ for row_ in summary_tables[i] if element in row_['param']}
+
+            logN = params.get(f"LogN {element}", {})
+            b = params.get(f"b {element}", {})
+
+            if flag == "saturated":
+                row[f"{element} LogN"] = f">{logN.get('p5', '---')}"
+                row[f"{element} b (km/s)"] = f"<{b.get('p95', '---')}"
+            elif flag == "not_detected":
+                row[f"{element} LogN"] = f"<{logN.get('p95', '---')}"
+                row[f"{element} b (km/s)"] = "---"
+            else:  # detected
+                row[f"{element} LogN"] = logN.get('median', '---')
+                row[f"{element} b (km/s)"] = b.get('median', '---')
+        if i>0:
+            rows.append(row)
+
+    # Optional: Total row
+    if len(rows) > 1:
+        total_row = {"Component": "Total", "Velocity (km/s)": None}
+        for element in elements:
+            
+            N_values = []
+            for r in rows:
+                val = str(r.get(f"{element} LogN", "---"))
+                if val.startswith("---"):
+                    continue
+                match = re.search(r"[\d.]+", val)
+                if match:
+                    try:
+                        N_values.append(10**float(match.group()))
+                    except ValueError:
+                        continue
+            
+            if len(N_values) > 0:
+                total_row[f"{element} LogN"] = f"{np.log10(np.sum(N_values)):.2f}"
+            else:
+                total_row[f"{element} LogN"] = "---"
+
+            total_row[f"{element} b (km/s)"] = "---"
+
+        rows.append(total_row)
+
+    df = pd.DataFrame(rows)
+
+    # Write CSV
+    os.makedirs("static/csv_outputs", exist_ok=True)
+    csv_path = os.path.join("static/csv_outputs", f"absorber_summary_{str(load_object('object_name.pkl'))}.csv")
+    df.to_csv(csv_path, index=False)
+
+    marg_path = '/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/chain_review/marginalized_flags.pkl'
+    try:
+        marginalized_flags = load_object(marg_path)
+    except FileNotFoundError:
+        marginalized_flags = {}
+
+    return render_template("chain_review.html", n_components=n_components,summary_tables=summary_tables,elements=elements,marginalized_flags=marginalized_flags )
+
+'''
+@app.route('/generate_latex', methods=['POST'])
+def generate_latex():
+    import os
+    from flask import request, render_template
+
+    flags = request.form.to_dict()
+    
+    # Load summary tables and elements list
+    summary_tables = load_object('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/chain_review/summary_tables.pkl')
+    save_dir = os.path.join("chain_upload", "user_upload")
+    elements = load_object(os.path.join(save_dir, 'initial/initial_element_list.pkl'))
+    n_components = len(summary_tables)
+
+    # Start formatting LaTeX table
+    table_options = (
+        r"\centering" "\n"
+        r"\resizebox{\textwidth}{!}{%" "\n"
+        r"\renewcommand{\arraystretch}{1.3}" "\n"
+        r"\tiny" "\n"
+    )
+
+    # Dynamically generate column format string and header names
+    columns = "|c"  # for velocity
+    column_names = "Velocity"
+    for element in elements:
+        columns += "|c|c"
+        column_names += f" & {element} LogN & {element} b (km/s)"
+
+    columns += "|"  # Close off the column format string
+
+    # Construct each row of the table
+    latex_rows = []
+    for i in range(n_components):
+        row = []
+
+        # Velocity value
+        velocity = {row['param']: row for row in summary_tables[i] if row['param'] == 'Velocity'}
+        row.append(f"{velocity.get('Velocity', {}).get('median', '---')}")
+
+        for element in elements:
+            # User-defined flag
+            flag = flags.get(f"flag_component_{i}_{element}")
+
+            # Fetch LogN and b values
+            params = {row['param']: row for row in summary_tables[i] if element in row['param']}
+            logN = params.get(f"LogN {element}", {})
+            b = params.get(f"b {element}", {})
+
+            if flag == "saturated":
+                row.append(f">$ {logN.get('p5', '---')}$")
+                row.append(f"<$ {b.get('p95', '---')}$")
+            elif flag == "not_detected":
+                row.append(f"<$ {logN.get('p95', '---')}$")
+                row.append("---")
+            else:  # detected
+                row.append(f"${logN.get('median', '---')}$")
+                row.append(f"${b.get('median', '---')}$")
+
+        # Add formatted LaTeX row
+        latex_rows.append(" & ".join(row) + r" \\" + "\n" + r"\hline" + "\n")
+
+    # Final LaTeX string
+    latex_output = (
+        r"\begin{table*}" "\n" +
+        table_options +
+        f"\\begin{{tabular}}{{{columns}}}\n" +
+        r"\hline" "\n" +
+        column_names + r" \\" + "\n" +
+        r"\hline" "\n" +
+        "".join(latex_rows) +
+        r"\end{tabular}" "\n" +
+        r"}" "\n" +
+        r"\caption{Summary of absorption line properties for each component.}" "\n" +
+        r"\label{tab:absorption_summary}" "\n" +
+        r"\end{table*}"
+    )
+
+    # Create a unique filename
+    filename = f"latex_table.tex"
+    filepath = os.path.join("static", "latex_tables", filename)
+
+    # Ensure directory exists
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+
+    # Save the file
+    with open(filepath, "w") as f:
+        f.write(latex_output)
+
+    return render_template("latex_result.html", latex_output=latex_output)'''
+
+
+@app.route('/latex_creation', methods=['POST'])
+def latex_creation():
+    from io import StringIO
+    import re
+
+    dataframes = []
+
+    for i in range(1, 5):  # Adjust if you expect more files
+        file = request.files.get(f"csv{i}")
+        if file and file.filename != "":
+            try:
+                # Read file into pandas DataFrame
+                content = file.read().decode("utf-8")
+                df = pd.read_csv(StringIO(content))
+                dataframes.append(df)
+            except Exception as e:
+                return f"Error reading csv{i}: {e}", 400
+    
+    los_names = []
+    detections = []
+
+    for df in dataframes:
+        # Extract LOS name from 'Object Name' column
+        full_name = str(df.get('Object Name', ['Unknown']).iloc[0])
+        los_name = full_name.split()[-1]  # e.g., 'A1'
+        df['LOS']=los_name
+        los_names.append(los_name)
+
+        # Detection if there are components
+        has_components = "Component" in df.columns and df["Component"].notna().any()
+        df['detection?']=has_components
+        detections.append(has_components)
+
+    combined_df = pd.concat(dataframes, ignore_index=True)
+    combined_df.to_csv('combined_df.csv',index=False)
+
+    # Define which columns hold EW measurements
+    ew_columns = [col for col in combined_df.columns if "EW" in col]
+
+    # Function to extract just the (<N) part and clean it
+    def extract_upper_limit(val):
+        if isinstance(val, str):
+            match = re.search(r'\(<(\d+)\)', val)
+            if match:
+                return f"<{match.group(1)}"
+        return val
+
+    # Apply this to all EW columns in rows where detection is False
+    for col in ew_columns:
+        mask = combined_df["detection?"] == False
+        combined_df.loc[mask, col] = combined_df.loc[mask, col].apply(extract_upper_limit)
+
+    # Clear repeating LOS entries (only keep the first of each group)
+    combined_df['LOS'] = combined_df['LOS'].mask(combined_df['LOS'].duplicated(), '')
+
+
+    combined_df= combined_df.drop('Object Name', axis=1)
+    combined_df= combined_df.drop('detection?', axis=1)
+
+    cols = combined_df.columns.tolist()
+    cols.insert(0, cols.pop(cols.index('LOS')))
+    combined_df = combined_df[cols]
+
+    def clean_val(val):
+        if pd.isna(val):
+            return ""
+        val = str(val).strip()
+
+        # Replace all forms of ± early
+        val = val.replace('+-', r'\pm').replace('+/-', r'\pm').replace('±', r'\pm')
+
+        # Skip "---" and blanks
+        if val == "---" or val == "":
+            return ""
+
+        # Wrap in math mode only if relevant
+        if any(op in val for op in ['<', '>', r'\pm']):
+            return f"${val}$"
+        
+        return val
+    
+    df_for_latex = combined_df.copy().applymap(clean_val)
+
+
+    '''def wrap_math_if_needed(val):
+        if pd.isna(val):
+            return ""
+        
+        val = str(val).strip()
+        
+        # Skip rows that are just '---' or empty
+        if val.strip() == "---" or val == "":
+            return ""
+        
+        # Only wrap if it looks like a number with latex or a limit
+        if re.search(r'[<>]|\\pm', val):
+            # Don't double wrap if already in math mode
+            if val.startswith("$") and val.endswith("$"):
+                return val
+            return f"${val}$"
+        
+        return val
+
+    # Apply to all cells
+    df_for_latex = combined_df.copy().applymap(wrap_math_if_needed)'''
+
+    # Then call .to_latex()
+    table_body = df_for_latex.to_latex(index=False, na_rep='', escape=False)
+
+    #table_body=combined_df.to_latex(index=False,na_rep='',escape=False)
+
+    match = re.search(r'\\begin{tabular}{([^}]*)}', table_body)
+    if match:
+        original_format = match.group(1)
+        num_columns = len(original_format)
+        new_format = '|'.join(['c'] * num_columns)
+        new_tabular_line = rf'\\begin{{tabular}}{{|{new_format}|}}'
+        table_body = re.sub(r'\\begin{tabular}{[^}]*}', new_tabular_line, table_body)
+
+    table_body = table_body.replace('+-', r'\pm').replace('+/-', r'\pm').replace('±',r'\pm')
+
+    table_body = table_body.replace(r'\toprule', r'')
+    table_body = table_body.replace(r'\midrule', r'')
+    table_body = table_body.replace(r'\bottomrule', r'')
+
+    table_body = re.sub(r'\\\\\n', r'\\\\\n\\hline\n', table_body)
+
+    full_latex=r"""\begin{table*}
+        \centering
+        \resizebox{\textwidth}{!}{%
+        \renewcommand{\arraystretch}{1.3}
+        \tiny
+        """ + table_body + r"""
+        }
+        \caption{Summary of absorber properties for each line of sight. Equivalent widths are in milli-Angstroms. Limits are $3\sigma$.}
+        \label{tab:absorbers}
+        \end{table*}
+        """
+
+    return render_template("latex_result.html", latex_output=full_latex)
+
+
+    
+
+
+@app.route('/download_latex/<file_id>')
+def download_latex():
+    from flask import send_file
+    filename = f"latex_table.tex"
+
+
+    if os.path.exists(filename):
+        return send_file(filename, as_attachment=True)
+    else:
+        return "File not found", 404
+
+
 
 
 @app.route('/upload_data', methods=['POST'])
@@ -304,18 +1135,71 @@ def add_manual_absorption():
 
     return jsonify({'success': True, 'absorptions': absorptions_summary})
 
-    #except Exception as e:
-    #    print(f"Error adding manual absorption: {e}")
-    #    return jsonify({'success': False, 'error': str(e)}), 500
+@app.route('/no_detection', methods=['POST'])
+def no_detection():
+
+    gal_z = float(request.form.get('manual_z'))
+
+    vp = load_object('current_vp.pkl')
+
+    line_dict=vp.no_detection(gal_z)
+
+    #create csv and bail
+    from astropy.cosmology import Planck18 as cosmo
+
+    # Convert to velocity relative to galaxy
+    vmin = -10
+    vmax = 10
+    #TODO COME BACK TO THIS
+
+
+    # Create a list of rows, starting with metadata
+    rows = [{
+        "Object Name" : str(load_object('object_name.pkl')),
+        "Galaxy Z": gal_z,
+        "Integration Window": (vmin, vmax),
+    }]
+
+    #rows[0]['Projected Distance']=np.round(abs(cosmo.comoving_distance(ref_z).to('kpc')-cosmo.comoving_distance(our_2796.suspected_z).to('kpc')),2)
+    #rows[0]['Absorber Redshift']=f"{our_2796.suspected_z:.5f}"
+
+    for key,value in line_dict.items():
+
+        ew,ew_error=value.actual_ew_func()
+
+        rows[0][f"{key.split(' ')[0]} {int(np.floor(float(key.split(' ')[1].strip())))} EW"]=f"{int(1000*ew)} +/- {int(1000*ew_error)} (<{int(3*1000*ew_error)})"
+
+        #rows[0][f"{key} EW"]=f"{(1000*ew):.2f} +- {(1000*ew_error):.2f}"
+
+    # Create a dataframe
+    df = pd.DataFrame(rows)
+
+    df.to_csv('absorber_data.csv',index=False)
+
+    #__________________________________________________________________________________________
+    #move all the stuff to new folder
+    import shutil 
+
+    object_folder=f"mcmc_outputs/{str(load_object('object_name.pkl'))}"
+    os.makedirs(object_folder,exist_ok=True)
+
+    #copy absorption csv file over too
+    shutil.copy('absorber_data.csv',object_folder)
+
+    return index()
+
+
+
 
 
 @app.route('/multi_mcmc', methods=['POST'])
-def multi_mcmc():
+def multi_mcmc(no_pre=False, fixed=False):
 
     from random import random
 
     clear_directory('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/Data/multi_mcmc/final')
     clear_directory('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/Data/multi_mcmc/initial')
+
 
     #try:
     absorber_index = int(request.form['absorber_index'])
@@ -323,6 +1207,13 @@ def multi_mcmc():
 
     if absorber_index==100:
         absorber=load_object('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/Data/custom_absorber/custom_absorber.pkl')
+        lines=request.form.getlist('multi_mcmc_elements')
+        absorber=absorber.return_specific_lines(lines)
+        element_list_dict={}
+        for line in lines:
+            element_list_dict[line.split(' ')[0]]=' '
+
+        element_list=list(element_list_dict.keys())
     
     elif absorber_index==101:
         absorber=load_object('custom_absorptions.pkl')
@@ -351,17 +1242,24 @@ def multi_mcmc():
 
     initial_guesses,line_dict=pre_mcmc(absorber,element_list)
 
+    #mcmc lines bounds
+    mcmc_lines = load_object('static/Data/multi_mcmc/initial/initial_mcmc_lines.pkl')
+    vmax_list = [line.vel_range[1] for line in mcmc_lines]
+    vmin_list = [line.vel_range[0] for line in mcmc_lines]
+    save_object(vmax_list,'static/Data/multi_mcmc/initial/vmax_list.pkl')
+    save_object(vmin_list,'static/Data/multi_mcmc/initial/vmin_list.pkl')
+
     #statuses
     num_params_per_line = 1 + 2 * len(element_list)
     param_list_2d = np.array(initial_guesses).reshape(-1, num_params_per_line)
-
+    
     display_params=param_list_2d.copy()
-    base_velocity = param_list_2d[0, 0]
-    display_params[:, 0] = np.round(param_list_2d[:, 0] - base_velocity, 1)
+    display_params[:, 0] = np.round(param_list_2d[:, 0], 1)
 
     for i,e in enumerate(element_list):
         display_params[:,1+(i*2)] = np.round(display_params[:,1+(i*2)],2)
         display_params[:,2+(i*2)] = np.round(display_params[:,2+(i*2)],2)
+    
 
     column_names=['Velocity']
     for e in element_list:
@@ -388,10 +1286,17 @@ def multi_mcmc():
         for line in line_dict.values()
     }
 
+
+
+    real_masked_regions={}
+    save_object(real_masked_regions,"static/Data/multi_mcmc/initial/masked_regions.pkl")
+
     save_object(velocity_data,'static/Data/multi_mcmc/initial/velocity_data.pkl')
     save_object(column_names,'static/Data/multi_mcmc/initial/column_names.pkl')
     save_object(param_list_2d,'static/Data/multi_mcmc/initial/initial_guesses.pkl')
     save_object(param_list_2d,'static/Data/multi_mcmc/initial/algo_guesses.pkl')
+
+
 
     return render_template('pre_mcmc.html',
                            parameters=display_params,
@@ -400,7 +1305,8 @@ def multi_mcmc():
                            velocity_data=velocity_data,
                            column_names=column_names,
                            elements=element_list,
-                           random=random()
+                           vmin_list=vmin_list,
+                           vmax_list=vmax_list,
                            )
 
 @app.route('/mcmc_param_update', methods=['POST'])
@@ -410,9 +1316,24 @@ def mcmc_param_update():
 
 
     param_list_2d=np.array(load_object('static/Data/multi_mcmc/initial/initial_guesses.pkl'))
-    base_velocity = param_list_2d[0,0]
+    elements=load_object('static/Data/multi_mcmc/initial/initial_element_list.pkl')
+
+    num_params_per_line = 1 + 2 * len(elements)
+    param_list_2d = param_list_2d.reshape(-1, num_params_per_line)
+    print('param list')
+    print(param_list_2d)
     num_rows=len(param_list_2d)
     num_cols=len(param_list_2d[0])
+
+    #updating mcmc_line bounds
+    mcmc_lines = load_object('static/Data/multi_mcmc/initial/initial_mcmc_lines.pkl')
+    vmin_list=[]
+    vmax_list=[]
+    for i, line in enumerate(mcmc_lines):
+        line.vel_range=(float(request.form.get(f'vmin_{i}', line.vel_range[0])),float(request.form.get(f'vmax_{i}', line.vel_range[1])))
+        vmin_list.append(float(request.form.get(f'vmin_{i}', line.vel_range[0])))
+        vmax_list.append(float(request.form.get(f'vmax_{i}', line.vel_range[1])))
+    save_object(mcmc_lines,'static/Data/multi_mcmc/initial/initial_mcmc_lines.pkl')
 
     #statuses
     params = []
@@ -425,47 +1346,60 @@ def mcmc_param_update():
             val = float(request.form[f'param_{i}_{j}'])
             status = request.form[f'status_{i}_{j}']
 
-            if j==0:
-                val += base_velocity
-
             param_row.append(val)
             status_row.append(status)
         params.append(param_row)
         statuses.append(status_row)
-
-    print('statuses')
-    print(statuses)
 
 
     element_list=load_object('static/Data/multi_mcmc/initial/initial_element_list.pkl')
     line_dict=load_object('static/Data/multi_mcmc/initial/initial_line_dict.pkl')
     column_names=load_object('static/Data/multi_mcmc/initial/column_names.pkl')
 
-    velocity_data=load_object('static/Data/multi_mcmc/initial/velocity_data.pkl')
+    velocity_data = {line.name: line.to_dict() for line in line_dict.values()}
+
+    velocity_data = {
+        f"{line.name.split()[0]} {int(math.floor(float(line.name.split()[1])))}": line.to_dict()
+        for line in line_dict.values()
+    }
     
     save_object(statuses,'static/Data/multi_mcmc/initial/initial_statuses.pkl')
+
+    #masking
+    real_masked_regions=load_object("static/Data/multi_mcmc/initial/masked_regions.pkl")
 
     masked_json = request.form.get("masked_regions")
     if masked_json:
         masked_regions = json.loads(masked_json)
 
-        real_masked_regions={}
         for key,value in masked_regions.items():
-            new_name=floor_to_wave(key)
-            real_masked_regions[new_name]=value
 
-        print(real_masked_regions)
+            new_name=floor_to_wave(key)
+            bounds=(value.get('xmin'),value.get('xmax'))
+            line_dict.get(new_name).add_masked_region(bounds)
+            if real_masked_regions.get(new_name) is None:
+                real_masked_regions[new_name]=[bounds]
+            else:
+                real_masked_regions.get(new_name).append(bounds)
+
             
         save_object(real_masked_regions,"static/Data/multi_mcmc/initial/masked_regions.pkl")
+        save_object(line_dict,'static/Data/multi_mcmc/initial/initial_line_dict.pkl')
+        print(real_masked_regions)
 
+    lmfit_iterations = int(request.form["lmfit_iterations"])
 
-    update_fit(params,element_list)
+    params=update_fit(params,element_list,lmfit_iterations)
+
+    params = np.array(params).reshape(-1, num_params_per_line)
 
     params_np = np.array(params)
 
+    print('status')
+    print(statuses)
+
     display_params=params_np.copy()
-    base_velocity = params_np[0, 0]
-    display_params[:, 0] = np.round(params_np[:, 0] - base_velocity, 1)
+    display_params[:, 0] = np.round(params_np[:, 0], 1)
 
     for i,e in enumerate(element_list):
         display_params[:,1+(i*2)] = np.round(display_params[:,1+(i*2)],2)
@@ -478,6 +1412,8 @@ def mcmc_param_update():
                            velocity_data=velocity_data,
                            column_names=column_names,
                            elements=element_list,
+                           vmin_list=vmin_list,
+                           vmax_list=vmax_list,
                            random=random()
                            )
 
@@ -486,6 +1422,9 @@ def mcmc_param_update():
 def actual_mcmc():
 
     params = load_object('static/Data/multi_mcmc/initial/initial_guesses.pkl')
+    elements=load_object('static/Data/multi_mcmc/initial/initial_element_list.pkl')
+    num_params_per_line = 1 + 2 * len(elements)
+    params = np.array(params).reshape(-1, num_params_per_line)
     statuses = load_object('static/Data/multi_mcmc/initial/initial_statuses.pkl')
 
     mcmc_steps = int(request.form.get('mcmc_steps', 1000))
@@ -501,6 +1440,20 @@ def actual_mcmc():
                             mcmc_steps=mcmc_steps,
                             mcmc_walkers=mcmc_walkers)
 
+@app.route('/manual_mcmc_lines', methods=['POST'])
+def manual_mcmc_lines():
+
+    vp = load_object('current_vp.pkl')
+    mcmc_lines = load_object('static/Data/multi_mcmc/initial/initial_mcmc_lines.pkl')
+
+    data = request.json
+    xmin = data['xmin']
+    xmax = data['xmax']
+
+    #try:
+    vp.smart_find(float(xmin), float(xmax))  # Process the selection
+    return jsonify({'success': True})
+
 @app.route('/add_component', methods=['POST'])
 def add_component():
     from random import random
@@ -510,23 +1463,53 @@ def add_component():
     statuses = load_object('static/Data/multi_mcmc/initial/initial_statuses.pkl')
     column_names = load_object('static/Data/multi_mcmc/initial/column_names.pkl')
     line_dict = load_object('static/Data/multi_mcmc/initial/initial_line_dict.pkl')
+    mcmc_lines = load_object('static/Data/multi_mcmc/initial/initial_mcmc_lines.pkl')
+    velocity_data=load_object('static/Data/multi_mcmc/initial/velocity_data.pkl')
+    element_list=load_object('static/Data/multi_mcmc/initial/initial_element_list.pkl')
+    vmin_list=load_object('static/Data/multi_mcmc/initial/vmin_list.pkl')
+    vmax_list=load_object('static/Data/multi_mcmc/initial/vmax_list.pkl')
+
+    print('parameters')
+    print(parameters)
+    print(len(parameters))
+
+    print(element_list)
+
+
+    num_params_per_line = 1 + 2 * len(element_list)
+    params = np.array(parameters).reshape(-1, num_params_per_line)
+
+    print('params')
+    print(params)
 
     # Create a new free row with reasonable values (copy from last row or use defaults)
-    new_row = list(parameters[-1])  # or [0.0]*len(parameters[0])
+    new_row = list(params[-1])  # or [0.0]*len(parameters[0])
     new_status_row = ['free'] * len(column_names)
 
-    parameters.append(new_row)
+    print('new row')
+    print(new_row)
+
+    parameters.extend(new_row)
+    params = np.array(parameters).reshape(-1, num_params_per_line)
     statuses.append(new_status_row)
+    import copy
+    mcmc_lines.append(copy.deepcopy(mcmc_lines[-1]))
 
     save_object(parameters, 'static/Data/multi_mcmc/initial/initial_guesses.pkl')
     save_object(statuses, 'static/Data/multi_mcmc/initial/initial_statuses.pkl')
+    save_object(mcmc_lines,'static/Data/multi_mcmc/initial/initial_mcmc_lines.pkl')
 
     return render_template('pre_mcmc.html',
-                           parameters=parameters,
+                           parameters=params,
                            statuses=statuses,
                            line_dict=line_dict,
+                           velocity_data=velocity_data,
                            column_names=column_names,
-                           random=random())
+                           elements=element_list,
+                           vmin_list=vmin_list,
+                           vmax_list=vmax_list,
+                           random=random()
+                           )
 
 @app.route('/delete_component', methods=['POST'])
 def delete_component():
@@ -536,6 +1519,15 @@ def delete_component():
     statuses = load_object('static/Data/multi_mcmc/initial/initial_statuses.pkl')
     column_names = load_object('static/Data/multi_mcmc/initial/column_names.pkl')
     line_dict = load_object('static/Data/multi_mcmc/initial/initial_line_dict.pkl')
+    mcmc_lines = load_object('static/Data/multi_mcmc/initial/initial_mcmc_lines.pkl')
+    velocity_data=load_object('static/Data/multi_mcmc/initial/velocity_data.pkl')
+    element_list=load_object('static/Data/multi_mcmc/initial/initial_element_list.pkl')
+    vmin_list=load_object('static/Data/multi_mcmc/initial/vmin_list.pkl')
+    vmax_list=load_object('static/Data/multi_mcmc/initial/vmax_list.pkl')
+
+    num_params_per_line = 1 + 2 * len(element_list)
+    parameters = np.array(parameters).reshape(-1, num_params_per_line)
+    parameters=list(parameters)
 
     try:
         index_to_remove = int(request.form['component_index'])
@@ -545,17 +1537,171 @@ def delete_component():
     if 0 <= index_to_remove < len(parameters) and len(parameters) > 1:
         parameters.pop(index_to_remove)
         statuses.pop(index_to_remove)
+        mcmc_lines.pop(index_to_remove)
+        vmin_list.pop(index_to_remove)
+        vmax_list.pop(index_to_remove)
 
     save_object(parameters, 'static/Data/multi_mcmc/initial/initial_guesses.pkl')
     save_object(statuses, 'static/Data/multi_mcmc/initial/initial_statuses.pkl')
+    save_object(mcmc_lines,'static/Data/multi_mcmc/initial/initial_mcmc_lines.pkl')
+    save_object(vmin_list,'static/Data/multi_mcmc/initial/vmin_list.pkl')
+    save_object(vmax_list,'static/Data/multi_mcmc/initial/vmax_list.pkl')
+
+    #mcmc_param_update()
 
     return render_template('pre_mcmc.html',
                            parameters=parameters,
                            statuses=statuses,
                            line_dict=line_dict,
+                           velocity_data=velocity_data,
                            column_names=column_names,
-                           random=random())
+                           elements=element_list,
+                           vmin_list=vmin_list,
+                           vmax_list=vmax_list,
+                           random=random()
+                           )
 
+
+@app.route('/chain_to_fixed_mcmc', methods=["POST"])
+def chain_to_fixed_mcmc():
+    
+    clear_directory('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/Data/multi_mcmc/final')
+    clear_directory('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/Data/multi_mcmc/initial')
+
+    save_dir = os.path.join("chain_upload", "user_upload")
+
+    chain=np.load(os.path.join(save_dir,"chain.npy"))
+    mcmc_lines=load_object(os.path.join(save_dir,'final/mcmc_lines.pkl'))
+    line_dict=load_object(os.path.join(save_dir,'final/line_dict.pkl'))
+    params = load_object(os.path.join(save_dir,'final/initial_guesses.pkl'))
+    element_list = load_object(os.path.join(save_dir,'initial/initial_element_list.pkl'))
+    num_params_per_line = 1 + 2 * len(element_list)
+    params = np.array(params).reshape(-1, num_params_per_line)
+    statuses = np.array(load_object(os.path.join(save_dir,'initial/initial_statuses.pkl')))
+    column_names=load_object(os.path.join(save_dir,'initial/column_names.pkl'))
+    ref_z=load_object(os.path.join(save_dir,'initial/ref_z.pkl'))
+
+    flattened = chain.reshape(-1, chain.shape[-1])  # shape: (10100*250, 10)
+    median_params = np.median(flattened, axis=0)
+    median_params_2d = np.reshape(median_params,(-1,num_params_per_line))
+    print('median_params')
+    print(median_params_2d)
+
+    for i in range(len(statuses)):
+        for j in range(len(statuses[i])):
+            statuses[i][j]='fixed'
+
+    velocity_data = {line.name: line.to_dict() for line in line_dict.values()}
+
+    velocity_data = {
+        f"{line.name.split()[0]} {int(math.floor(float(line.name.split()[1])))}": line.to_dict()
+        for line in line_dict.values()
+    }
+
+    vmax_list = [line.vel_range[1] for line in mcmc_lines]
+    vmin_list = [line.vel_range[0] for line in mcmc_lines]
+    save_object(vmax_list,'static/Data/multi_mcmc/initial/vmax_list.pkl')
+    save_object(vmin_list,'static/Data/multi_mcmc/initial/vmin_list.pkl')
+
+    real_masked_regions={}
+    save_object(real_masked_regions,"static/Data/multi_mcmc/initial/masked_regions.pkl")
+
+    save_object(line_dict,'static/Data/multi_mcmc/initial/initial_line_dict.pkl')
+    save_object(mcmc_lines,'static/Data/multi_mcmc/initial/initial_mcmc_lines.pkl')
+    save_object(element_list,'static/Data/multi_mcmc/initial/initial_element_list.pkl')
+
+    save_object(ref_z,'static/Data/multi_mcmc/initial/ref_z.pkl')
+    save_object(velocity_data,'static/Data/multi_mcmc/initial/velocity_data.pkl')
+    save_object(column_names,'static/Data/multi_mcmc/initial/column_names.pkl')
+    save_object(median_params_2d,'static/Data/multi_mcmc/initial/initial_guesses.pkl')
+    save_object(median_params_2d,'static/Data/multi_mcmc/initial/algo_guesses.pkl')
+
+    plot_fits(median_params,line_dict,element_list,mcmc_lines,'initial/initial_guesses')
+
+    column_names=['Velocity']
+    for e in element_list:
+        column_names.append(f'LogN {e}')
+        column_names.append(f'b {e}')
+
+    return render_template('pre_mcmc.html',
+                        parameters=median_params_2d,
+                        statuses=statuses,
+                        line_dict=line_dict,
+                        velocity_data=velocity_data,
+                        column_names=column_names,
+                        elements=element_list,
+                        vmin_list=vmin_list,
+                        vmax_list=vmax_list,
+                        )
+
+
+@app.route('/chain_to_mcmc', methods=['POST'])
+def chain_to_mcmc():
+    
+    clear_directory('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/Data/multi_mcmc/final')
+    clear_directory('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/Data/multi_mcmc/initial')
+
+    save_dir = os.path.join("chain_upload", "user_upload")
+
+    chain=np.load(os.path.join(save_dir,"chain.npy"))
+    mcmc_lines=load_object(os.path.join(save_dir,'final/mcmc_lines.pkl'))
+    line_dict=load_object(os.path.join(save_dir,'final/line_dict.pkl'))
+    params = load_object(os.path.join(save_dir,'final/initial_guesses.pkl'))
+    element_list = load_object(os.path.join(save_dir,'initial/initial_element_list.pkl'))
+    num_params_per_line = 1 + 2 * len(element_list)
+    params = np.array(params).reshape(-1, num_params_per_line)
+    statuses = np.array(load_object(os.path.join(save_dir,'initial/initial_statuses.pkl')))
+    column_names=load_object(os.path.join(save_dir,'initial/column_names.pkl'))
+    ref_z=load_object(save_dir,'initial/ref_z.pkl')
+
+    flattened = chain.reshape(-1, chain.shape[-1])  # shape: (10100*250, 10)
+    median_params = np.median(flattened, axis=0)
+    median_params_2d = np.reshape(median_params(-1,num_params_per_line))
+
+    velocity_data = {line.name: line.to_dict() for line in line_dict.values()}
+
+    velocity_data = {
+        f"{line.name.split()[0]} {int(math.floor(float(line.name.split()[1])))}": line.to_dict()
+        for line in line_dict.values()
+    }
+
+    vmax_list = [line.vel_range[1] for line in mcmc_lines]
+    vmin_list = [line.vel_range[0] for line in mcmc_lines]
+    save_object(vmax_list,'static/Data/multi_mcmc/initial/vmax_list.pkl')
+    save_object(vmin_list,'static/Data/multi_mcmc/initial/vmin_list.pkl')
+
+    real_masked_regions={}
+    save_object(real_masked_regions,"static/Data/multi_mcmc/initial/masked_regions.pkl")
+
+    save_object(line_dict,'static/Data/multi_mcmc/initial/initial_line_dict.pkl')
+    save_object(mcmc_lines,'static/Data/multi_mcmc/initial/initial_mcmc_lines.pkl')
+    save_object(element_list,'static/Data/multi_mcmc/initial/initial_element_list.pkl')
+
+    save_object(ref_z,'static/Data/multi_mcmc/initial/ref_z.pkl')
+    save_object(velocity_data,'static/Data/multi_mcmc/initial/velocity_data.pkl')
+    save_object(column_names,'static/Data/multi_mcmc/initial/column_names.pkl')
+    save_object(median_params_2d,'static/Data/multi_mcmc/initial/initial_guesses.pkl')
+    save_object(median_params_2d,'static/Data/multi_mcmc/initial/algo_guesses.pkl')
+
+    plot_fits(median_params,line_dict,element_list,mcmc_lines,'initial/initial_guesses')
+
+    column_names=['Velocity']
+    for e in element_list:
+        column_names.append(f'LogN {e}')
+        column_names.append(f'b {e}')
+
+    return render_template('pre_mcmc.html',
+                        parameters=median_params_2d,
+                        statuses=statuses,
+                        line_dict=line_dict,
+                        velocity_data=velocity_data,
+                        column_names=column_names,
+                        elements=element_list,
+                        vmin_list=vmin_list,
+                        vmax_list=vmax_list,
+                        )
+
+    
 
 @app.route('/data')
 def data():
@@ -582,8 +1728,37 @@ def save_selection():
     #try:
     vp.smart_find(float(xmin), float(xmax))  # Process the selection
     return jsonify({'success': True})
-    #except Exception as e:
-    #    return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/manual_smart_find', methods=['POST'])
+def manual_smart_find():
+        
+        vp = load_object('current_vp.pkl')
+
+        z = float(request.form['manual_z'])
+        vmin = float(request.form['manual_vmin'])
+        vmax = float(request.form['manual_vmax'])
+
+        #vp.smart_find_velocity(z,vmin,vmax)
+
+        # Convert velocities to wavelength range for the smart find
+        c_kms = 299792.458
+        lambda_2796 = 2796.354269  # example rest wavelength of MgII
+
+        lambda_min = lambda_2796 * (1 + z) * (1 + vmin / c_kms)
+        lambda_max = lambda_2796 * (1 + z) * (1 + vmax / c_kms)
+
+
+        vp.smart_find(lambda_min,lambda_max)
+
+        custom_absorber=load_object('static/Data/custom_absorber/custom_absorber.pkl')
+
+        custom_absorber_fluxplot=url_for('static', filename='Data/custom_absorber/FluxPlot.html')
+
+        return render_template('custom_absorber_page.html',
+                            absorber=custom_absorber,
+                            fluxplot=custom_absorber_fluxplot
+                                )
+
 
 @app.route('/show_custom_results', methods=['GET'])
 def show_custom_results():
@@ -614,179 +1789,6 @@ def continued_mcmc():
                            column_names=column_names,
                            elements=elements,
                            )
-
-'''
-@app.route('/continue_mcmc', methods=['POST'])
-def continued_mcmc():
-
-    mcmc_steps = int(request.form.get('continued_multi_mcmc_steps', 1000))
-    mcmc_walkers = int(request.form.get('continued_multi_mcmc_walkers', 250))
-
-    map_params = load_object('static/Data/multi_mcmc/final/map_params.pkl')
-    statuses = load_object('static/Data/multi_mcmc/initial/initial_statuses.pkl')
-    elements=load_object('static/Data/multi_mcmc/initial/initial_element_list.pkl')
-
-    params_per_line = 1 + 2 * len(elements)
-    if map_params.ndim == 1:
-        initial_guesses = map_params.reshape(-1, params_per_line)
-
-
-    mcmc(initial_guesses,statuses,mcmc_steps,mcmc_walkers)
-
-    #clear_directory('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/Data/multi_mcmc/final')
-
-    # Run the continued MCMC
-    #continue_mcmc(mcmc_steps,mcmc_walkers)
-
-    return render_template('mcmc_results.html',
-                            fit_plot_url = url_for('static', filename='Data/multi_mcmc/final/final_models.png'),
-                            plot_url=url_for('static', filename='Data/multi_mcmc/final/mcmc_results.csv'),
-                            trace_plot_url=url_for('static', filename='Data/multi_mcmc/final/mcmc_trace.png'),
-                            corner_plot_url=url_for('static', filename='Data/multi_mcmc/final/mcmc_corner.png'),
-                            mcmc_steps=mcmc_steps,
-                            mcmc_walkers=mcmc_walkers)'''
-
-    
-
-#pop up tkinter window
-from tkinter import Tk, Entry, Label, Button, StringVar
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg,NavigationToolbar2Tk
-import matplotlib.pyplot as plt
-
-def launch_tk(selected_catalog, selected_spectrum, shared_custom_absorptions):
-    from tkinter import Tk
-    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-    import matplotlib.pyplot as plt
-    from matplotlib.widgets import SpanSelector
-
-    print('Creating tkinter window')
-
-    root = Tk()
-    root.lift()
-    root.attributes('-topmost', True)
-    root.after_idle(root.attributes, '-topmost', False)
-    root.title("Select Absorption Range")
-
-    # Load Spectrum Data
-    vp = load_object('current_vp.pkl')
-    wavelength = vp.wavelength
-    flux = vp.flux
-    error = vp.error
-
-    plt.clf()
-
-    fig, ax = plt.subplots(figsize=(8, 4))
-    ax.step(wavelength, flux,where='mid', label="Flux", color="black",linewidth=.5)
-    ax.step(wavelength,error,where='mid', label="Error", color="purple",linewidth=.5)
-    ax.set_xlim(min(wavelength),max(wavelength))
-    ax.set_ylim(0,2)
-    ax.set_title('Select Absorption Line')
-
-    selected_range = {'start': None, 'end': None}
-
-    def onselect(xmin, xmax):
-        selected_range['start'] = xmin
-        selected_range['end'] = xmax
-        print(f"Selected range: {xmin} - {xmax}")
-
-    span = SpanSelector(ax, onselect, 'horizontal', useblit=True,
-                        props=dict(alpha=0.5, facecolor='red'))
-
-    canvas = FigureCanvasTkAgg(fig, master=root)
-    canvas.draw()
-    canvas.get_tk_widget().pack()
-
-    # Add toolbar for zoom/pan/save
-    toolbar = NavigationToolbar2Tk(canvas, root)
-    toolbar.update()
-    toolbar.pack()
-
-    element_var = StringVar()
-    transition_var = StringVar()
-
-    Label(root, text="Element:").pack()
-    element_entry = Entry(root, textvariable=element_var)
-    element_entry.pack()
-
-    Label(root, text="Transition:").pack()
-    transition_entry = Entry(root, textvariable=transition_var)
-    transition_entry.pack()
-
-    # Submit function
-    def submit_absorption():
-        element = element_var.get().strip()
-        transition = float(transition_var.get().strip())
-        start = selected_range['start']
-        end = selected_range['end']
-
-        if not element or not transition:
-            print("Please enter both element and transition!")
-            return
-
-        if start is None or end is None:
-            print("Please select a range first!")
-            return
-
-        # Create new absorption line
-        vp = load_object('current_vp.pkl')
-        shared_custom_absorptions[f"{element} {transition}"] = vp.make_new_absorption(start, end,element,transition)
-        print(f"Added absorption: {element} {transition}, Range: {start:.2f} - {end:.2f}")
-
-        print('custom absorptions')
-        print(shared_custom_absorptions)
-
-        print('wavelength test')
-        print(shared_custom_absorptions.values()[0].wavelength)
-
-        # Save a marker file to indicate update
-        with open('update_flag.txt', 'w') as f:
-            f.write('updated')
-
-        root.quit()  # Close window after submission
-
-    Button(root, text="Submit Absorption", command=submit_absorption).pack(pady=10)
-
-    root.mainloop()
-
-
-import multiprocessing
-
-@app.route('/hand_select_absorption', methods=['POST'])
-def hand_select_absorption():
-
-    selected_catalog = session.get("selected_catalog")
-    selected_spectrum = session.get("selected_spectrum")
-
-    # Pass session variables to process
-    p = multiprocessing.Process(target=launch_tk, args=(selected_catalog, selected_spectrum, custom_absorptions))
-    p.start()
-
-    return jsonify({'status': 'success', 'message': 'Tkinter window launched. Please select range locally.'})
-
-
-@app.route('/custom_multi_mcmc',methods=['POST'])
-def custom_multi_mcmc():
-
-    mcmc_steps = int(request.form.get('custom_multi_mcmc_steps', 1000))
-    mcmc_walkers = int(request.form.get('custom_multi_mcmc_walkers', 250))
-
-    actual_custom_absorptions={}
-    elements_dict={}
-    for key,value in custom_absorptions.items():
-        actual_custom_absorptions[key]=value
-        elements_dict[key.split(' ')[0]]=value
-
-    elements=elements_dict.keys()
-
-    run_multi_mcmc(actual_custom_absorptions,elements,mcmc_steps,mcmc_walkers)
-
-    return render_template('mcmc_results.html',
-                            fit_plot_url = url_for('static', filename='Data/multi_mcmc/final/final_models.png'),
-                            plot_url=url_for('static', filename='Data/multi_mcmc/final/mcmc_results.csv'),
-                            trace_plot_url=url_for('static', filename='Data/multi_mcmc/final/mcmc_trace.png'),
-                            corner_plot_url=url_for('static', filename='Data/multi_mcmc/final/mcmc_corner.png'),
-                            mcmc_steps=mcmc_steps,
-                            mcmc_walkers=mcmc_walkers)
 
 
 

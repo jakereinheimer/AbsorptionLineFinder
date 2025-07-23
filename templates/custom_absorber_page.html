@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-store" />
+    <title>Custom Absorber</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+
+</head>
+<body>
+    <!-- Flux Plot Section -->
+    <div id=""fluxPlot>
+        <h2>Flux Plot</h2>
+        <iframe src="{{ fluxplot }}" width="100%" height="600px" frameborder="0"></iframe>
+    </div>
+
+
+
+    <!-- Multi-Element MCMC Form with Checkboxes -->
+    <form action="{{ url_for('multi_mcmc') }}" method="post">
+        <input type="hidden" name="absorber_index" value="{{ 100 }}">
+
+        <label>Select Elements for Multi MCMC:</label>
+        <div style="display: flex; flex-wrap: wrap;">
+            {% for line in absorber.list_lines() %}
+                <label style="margin-right: 10px;">
+                    <input type="checkbox" name="multi_mcmc_elements" value="{{ line.name }}">
+                    {{ line.name }}
+                </label>
+            {% endfor %}
+        </div>
+
+        <input type="number" name="ref_z" value="0" step="any">
+
+        <button type="submit">Run Multi MCMC</button>
+    </form>
+
+</body>
+</html>

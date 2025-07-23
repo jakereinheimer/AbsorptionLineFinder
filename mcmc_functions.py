@@ -8,8 +8,10 @@ import pickle
 
 from essential_functions import read_parameter
 
-e = 4.8032e-10 # electron charge in stat-coulumb
-m_e = 9.10938e-28 # electron mass
+#e = 4.8032e-10 # electron charge in stat-coulumb
+e = 4.80320425 * 10**-10
+#m_e = 9.10938e-28 # electron mass
+m_e = 9.1094 *10**-28
 c = 2.9979e10 # cm/s
 c_As = 2.9979e18
 c_kms = 2.9979e5
@@ -24,21 +26,8 @@ class mcmc_line:
 
         self.microLines={}
 
-        #self.params=[example_line.z,example_line.log_N,example_line.b]
-
-        if saturation_direction is not None:
-            self.saturation=True
-        else:
-            self.saturation=False
-
         #self.z=self.params[0]
         self.z=(example_line.peak-example_line.suspected_line)/example_line.suspected_line
-        if saturation_direction is None:
-            self.vel=redshift_to_velocity(self.z)
-        elif saturation_direction == 'right':
-            self.vel=redshift_to_velocity(self.z)+10
-        elif saturation_direction == 'left':
-            self.vel=redshift_to_velocity(self.z)-5
 
         #self.logN=self.params[1]
         #self.b=self.params[2]
@@ -58,11 +47,12 @@ class mcmc_line:
 
         
     def export_params(self):
+        
+        vels=[microline.mcmc_vel for microline in list(self.microLines.values())]
 
-        def get_logN_value(absorption_line):
-            return absorption_line.logN
+        self.vel_range=(list(self.microLines.values())[0].velocity[0],list(self.microLines.values())[0].velocity[-1])
 
-        params = [self.vel]
+        params = [np.mean(np.array(vels))]
 
         self.line_dict={}
         for e in self.elements:
@@ -78,12 +68,10 @@ class mcmc_line:
                 b=2
 
             else:
-                if self.saturation:
-                    log_N = line_to_use.logN
-                else:
-                    log_N=line_to_use.logN
 
-                b=len(line_to_use.wavelength)
+                log_N=line_to_use.logN
+
+                b=len(line_to_use.wavelength)#/np.sqrt(2)
 
             params.extend([log_N,b])
 
@@ -245,10 +233,23 @@ def rebuild_full_samples(
         full_samples[:, flat_index] = flat_samples[:, k]
 
     # --- Step 3: Fill anchored parameters ---
+
+    for (i, j), ref_element in anchor_map.items():
+        target_element_index = (j - 1) // 2
+        target_element = elements[target_element_index]
+
+        ref_index = elements.index(ref_element)
+        ref_b_col = 1 + 2 * ref_index + 1
+        ref_flat_index = i * n_cols + ref_b_col
+        target_flat_index = i * n_cols + j
+
+        full_samples[:, target_flat_index] = full_samples[:, ref_flat_index]
+    
+    '''
     for (i, j), (ti, tj) in anchor_map.items():
         src_index = ti * n_cols + tj
         dest_index = i * n_cols + j
-        full_samples[:, dest_index] = full_samples[:, src_index]
+        full_samples[:, dest_index] = full_samples[:, src_index]'''
 
     # --- Step 4: Fill thermal parameters ---
     def read_atomic_mass(element):
@@ -312,8 +313,8 @@ def parse_statuses(statuses, initial_guesses):
             elif status == 'fixed':
                 fixed_values[(i, j)] = initial_guesses[i][j]
             elif status.startswith('anchor_to:'):
-                target = int(status.split(':')[1])
-                anchor_map[(i, j)] = (target, j)
+                target = (status.split(':')[1])
+                anchor_map[(i, j)] = target
             elif status.startswith('thermal:'):
                 element = status.split(':')[1]
                 thermal_map[(i, j)] = element
@@ -336,9 +337,16 @@ def rebuild_full_params(free_values, free_indices, fixed_values, anchor_map, sha
 
     for idx, (i, j) in enumerate(free_indices):
         full_params[i, j] = free_values[idx]
-
+    '''
     for (i, j), (ti, tj) in anchor_map.items():
         full_params[i, j] = full_params[ti, tj]
+    '''
+    for (i, j), element in anchor_map.items():
+            ref_index = elements.index(element)
+            target_index = (j - 1) // 2
+            ref_b_idx = 1 + ref_index * 2 + 1
+            ref_b = full_params[i, ref_b_idx]
+            full_params[i, j] = ref_b
 
     if thermal_map:
         for (i, j), element in thermal_map.items():
@@ -371,42 +379,6 @@ def rebuild_full_params(free_values, free_indices, fixed_values, anchor_map, sha
 
 
 
-
-#not used:
-def interpolate_spectrum(wavelength, flux, error, original_resolution, target_resolution):
-    c = 299792.458  # Speed of light in km/s
-    delta_lambda_original = (original_resolution / c) * wavelength
-    delta_lambda_target = (target_resolution / c) * wavelength
-
-    # Create new wavelength grid based on the target resolution
-    new_wavelength = np.arange(wavelength[0], wavelength[-1], np.median(delta_lambda_target))
-
-    # Interpolation functions
-    flux_interp = interp1d(wavelength, flux, kind='linear', fill_value="extrapolate")
-    error_interp = interp1d(wavelength, error, kind='linear', fill_value="extrapolate")
-
-    # Interpolate flux and error
-    new_flux = flux_interp(new_wavelength)
-    new_error = error_interp(new_wavelength)
-
-    return new_wavelength, new_flux, new_error
-
-def resample_spectrum(wavelength, flux, error, new_length):
-    # Create new wavelength grid with the specified number of points
-    new_wavelength = np.linspace(wavelength[0], wavelength[-1], new_length)
-
-    # Interpolation functions
-    flux_interp = interp1d(wavelength, flux, kind='linear', fill_value="extrapolate")
-    error_interp = interp1d(wavelength, error, kind='linear', fill_value="extrapolate")
-
-    # Interpolate flux and error to the new wavelength grid
-    new_flux = flux_interp(new_wavelength)
-    new_error = error_interp(new_wavelength)
-
-    return new_wavelength, new_flux, new_error
-
-
-#used:
 def find_N(wavelength,flux, z, f, lambda_0):
     
     # Adjust wavelengths for redshift
@@ -434,42 +406,59 @@ def find_N(wavelength,flux, z, f, lambda_0):
 
 
 
-def voigt(a, u):
-   
-   return wofz(u + 1j * a).real
+def voigt(x, y):
 
-def calctau(wave, z, logN, b, line):
+    z=x+(1j*y)
 
-    line_actual=line.suspected_line
+    return wofz(z).real
+    #return wofz(u + 1j * a).real
+
+def calctau(velocity,ref_vel,logN, b, line):
+
+    
     f=line.f
     gamma=line.gamma
-
-    wave0=(1+z)*line_actual
     
     # Go from logN to N
-    N = 10.0**logN
-    
-    # calculate the rest-frame frequency in 1/s
-    nu0 = c_As/wave0
-    
-    # Go into ion rest-frame
-    wave_rest = wave#/(1 + z)
-    
-    # Calculate nu in the rest-frame
-    nu_rest = c_As/wave_rest
-    
-    dopplerWidth = b*nu0/c_kms
-    a = gamma/4.0/np.pi/dopplerWidth
-    u = (nu_rest - nu0)/dopplerWidth
-    
-    H = voigt(a, u)
-    
-    # calculate tau
-    #tau = N*np.pi*e**2/m_e/c*f/np.sqrt(np.pi)/dopplerWidth*H
-    #tau = ((N*np.pi*(e**2)*(wave0_cm**2))/(m_e*c**2))*f*H
-    tau = N*np.pi*e**2/m_e/c*f/np.sqrt(np.pi)/dopplerWidth*H
-    
+    N = 10.0**logN #cm^-2
+
+    lambda_array=line.suspected_line*(1+(velocity/c_kms)) #angstroms
+    lambda_naut=line.suspected_line*(1+(ref_vel/c_kms))   #angstroms
+
+    delta_lambda_d = (b/c_kms)*lambda_naut #angstroms
+
+    x_lambda=(lambda_array-lambda_naut)/delta_lambda_d #dimensionless (angstrom/angstrom)
+    y=(gamma*lambda_naut**2)/(4*np.pi*c_As*delta_lambda_d) #dimensionless
+
+    H=voigt(x_lambda,y)
+
+    numerator=N*np.pi*(e**2)*(lambda_naut**2)*f #I worked out the units and it ends up being cm/angstroms
+    denomenator=m_e*(c_As**2)*np.sqrt(np.pi)*delta_lambda_d * 1e-8 #comes out to angstroms, convert to cm to have dimensionless units
+
+    tau=(numerator/denomenator)*H # dimensionless
+
+    #now calc flux from tau
     return np.exp(-tau)
+    '''
+    # calculate the rest-frame frequency in 1/s
+    nu0 = c_As/line.suspected_line
+    nu_ref = nu0 * (1 - ref_vel / c_kms)
+
+    # Calculate nu in the rest-frame
+    nu_rest = nu0 * (1 - velocity / c_kms)
+
+    #this should be lambda naut
+    delta_lambda_d = (b/c_kms)*(c_kms/nu_rest)#b*nu0/c_kms
+    a = gamma/4.0/np.pi/delta_lambda_d
+    u = (nu_rest - nu_ref)/delta_lambda_d
+
+    H = voigt(a, u)
+
+    # calculate tau
+    numerator=
+    tau = N*np.pi*e**2/m_e/c*f/np.sqrt(np.pi)/delta_lambda_d*H
+
+    return np.exp(-tau)'''
 
 def kernel_gaussian(wave, wave_mean, sigma):
    
@@ -478,15 +467,13 @@ def kernel_gaussian(wave, wave_mean, sigma):
    
    return kernel
 
-def convolve_flux(wave,flux):
-    # Assume that the wavelength interval is small
-     wave_mean = np.mean(wave)
-     resvel=read_parameter('resolution')
-     dW_fwhm = resvel/c_kms*wave_mean
-     dW_sigma = dW_fwhm/2/np.sqrt(2*np.log(2))
+def convolve_flux(vel,flux,fwhm):
+     
+     dW_fwhm = fwhm
+     dW_sigma = dW_fwhm/2.355
      
      #pixScale = wave[int(len(wave)/2)] - wave[int(len(wave)/2 - 1)]  
-     pixScale = wave[1]-wave[0]
+     pixScale = vel[1]-vel[0]
      dPix_sigma = dW_sigma/pixScale
      
      
@@ -497,15 +484,16 @@ def convolve_flux(wave,flux):
      pix_mean = 0.0
   
      kernel = kernel_gaussian(pix_kernel, pix_mean, dPix_sigma)
+
      # Continuum subtract and invert to prevent edge effects
-     flux = flux - 1
-     flux = flux*-1
+     #flux = flux - 1
+     #flux = flux*-1
      flux = convolve(flux, kernel, 'same')
      
      
      # Now undo continuum subtraction and inversion
-     flux = flux*-1
-     flux = 1 + flux
+     #flux = flux*-1
+     #flux = 1 + flux
 
      return flux
 
@@ -516,13 +504,6 @@ def summarize_params(flat_samples, labels, elements, mcmc_lines, file_name):
     summary = []
     params_per_microline = (2 * len(elements)) + 1
 
-    c_kms = 299792.458
-    ref_z=load_object('static/Data/multi_mcmc/initial/ref_z.pkl')
-
-    reference_line_ind = 0
-    ref_param_block = flat_samples[:, reference_line_ind * params_per_microline:(reference_line_ind + 1) * params_per_microline]
-    ref_vel_p16, ref_vel_p50, ref_vel_p84 = np.percentile(ref_param_block[:, 0], [16, 50, 84])
-
 
     for i, mcmc_line_obj in enumerate(mcmc_lines):
         param_block = flat_samples[:, i * params_per_microline:(i + 1) * params_per_microline]
@@ -530,7 +511,7 @@ def summarize_params(flat_samples, labels, elements, mcmc_lines, file_name):
         # Velocity
         vel_samples = param_block[:, 0]
         vel_p16, vel_p50, vel_p84 = np.percentile(vel_samples, [16, 50, 84])
-        rel_median = vel_p50 - redshift_to_velocity(ref_z)
+        rel_median = vel_p50
         rel_low = vel_p50 - vel_p16
         rel_high = vel_p84 - vel_p50
 
@@ -558,58 +539,3 @@ def summarize_params(flat_samples, labels, elements, mcmc_lines, file_name):
     df = pd.DataFrame(summary)
     df.to_csv(f"static/Data/multi_mcmc/{file_name}.csv", index=False)
     return df
-
-
-
-'''def summarize_params(flat_samples, labels, elements, mcmc_lines,file_name):
-    summary = []
-
-    params_per_microline = (2 * len(elements)) + 1
-    c = 299792.458  # speed of light in km/s
-
-    reference_line_ind=0
-
-    #reference data
-    ref_param_block=flat_samples[:, reference_line_ind*params_per_microline:(reference_line_ind+1)*params_per_microline]
-
-    ref_vel_samples = ref_param_block[:, 0]
-    ref_vel_median = np.median(ref_vel_samples)
-    ref_vel_low, ref_vel_high = np.percentile(ref_vel_samples, [16,84])
-
-
-    for i, mcmc_line_obj in enumerate(mcmc_lines):
-
-        #actual data
-        param_block = flat_samples[:, i*params_per_microline:(i+1)*params_per_microline]
-
-        vel_samples = param_block[:, 0]
-        vel_median = np.median(vel_samples)
-        vel_low, vel_high = np.percentile(vel_samples, [16,84])
-
-
-        #now subtract to get relative velocity
-        rel_median = vel_median - ref_vel_median
-        rel_low = vel_low - ref_vel_low
-        rel_high = vel_high - ref_vel_high
-        
-        # Add rows for each element
-        for j, element in enumerate(elements):
-            logN_samples = param_block[:, (j*2)+1]
-            b_samples = param_block[:, (j*2)+2]
-
-            logN_median = np.median(logN_samples)
-            logN_low, logN_high = np.percentile(logN_samples, [16, 84])
-            b_median = np.median(b_samples)
-            b_low, b_high = np.percentile(b_samples, [16, 84])
-
-            summary.append({
-                'Component': i+1,
-                'Species': f"{element}",
-                f'dv_c (km/s)': f"{rel_median:.1f} (+{rel_high - rel_median:.2f}/-{rel_median - rel_low:.2f})",
-                f'log N': f"{logN_median:.2f} (+{logN_high - logN_median:.2f}/-{logN_median - logN_low:.2f}) ; ifsat ({np.percentile(logN_samples, 5)})",
-                f'b (km/s)': f"{b_median:.1f} (+{b_high - b_median:.1f}/-{b_median - b_low:.1f}) ; ifsat ({np.percentile(b_samples, 95)})"
-            })
-
-    df = pd.DataFrame(summary)
-    df.to_csv(f"static/Data/multi_mcmc/{file_name}.csv",index=False)
-    return df'''

@@ -17,7 +17,6 @@ import json
 
 from essential_functions import read_atomDB,clear_directory
 from mcmc_functions import redshift_to_velocity
-#from mcmc import run_mcmc
 
 
 # Constants
@@ -66,6 +65,23 @@ class Absorber:
         df.to_csv(f"Absorbers/csvs/{self.z:.2f}_absorber.csv")
 
         save_object(self,f'Absorbers/objs/{self.z:.2f}_absorber.pkl')
+
+    def list_lines(self):
+
+        the_list=list(self.lines.values())
+
+        return the_list
+    
+    def return_specific_lines(self,inp):
+        
+        line_dict={}
+        for line in inp:
+            for abs_line in list(self.lines.values()):
+                if line == abs_line.name:
+                    line_dict[line]=abs_line
+
+        return line_dict
+
 
     def list_found_elements(self):
 
@@ -126,7 +142,7 @@ class Absorber:
 
             ax.step(velocity, lines[i].MgII_flux, where='mid', label=f"Spectrum of {lines[i].peak:.2f} Å", color="black")
 
-            for microline in line.microLines:
+            for microline in line.mcmc_microlines:
                 
                 microline_vel=(microline.wavelength - reference_microline) / reference_microline * c
 
@@ -239,6 +255,10 @@ class MicroAbsorptionLine:
 
         else:
             self.is_saturated=False
+
+    def take_vel(self,vel):
+
+        self.velocity=vel
     
     
     def calcw(self):
@@ -311,9 +331,10 @@ class MicroAbsorptionLine:
 #____________________________________________________________________________________________________
 
 class AbsorptionLineSystem:
-    def __init__(self, vpfit,lines,full=False):
+    def __init__(self, vpfit,lines,full=False,fwhm=None):
 
         self.vpfit=vpfit
+        self.fwhm=fwhm
 
         if isinstance(lines,list):
             self.microLines=lines
@@ -339,6 +360,10 @@ class AbsorptionLineSystem:
         self.wavelength=vpfit.wavelength[self.start_ind:self.end_ind]
         self.flux = vpfit.flux[self.start_ind:self.end_ind]
         self.errors = vpfit.error[self.start_ind:self.end_ind]
+
+        if isinstance(lines,tuple):
+            #populate the lines microlines if not already given
+            self.microLines=vpfit.optimizedMethod(wavelength=self.wavelength, flux=self.flux, error=self.errors, beg_ind=self.start_ind,N=1)
 
         '''        if isinstance(lines,tuple):
 
@@ -373,6 +398,15 @@ class AbsorptionLineSystem:
         else:
             self.is_saturated=False
 
+        if self.fwhm is None:
+            if self.peak<self.vpfit.boundry:
+                self.fwhm=self.vpfit.blue_fwhm
+            elif self.peak>=self.vpfit.boundry:
+                self.fwhm=self.vpfit.red_fwhm
+            else:
+                print('fwhm not accuractly reported')
+                self.fwhm=10
+
         #self.EW=self.calculate_equivalent_width()
         self.EW=self.equivalent_width()
 
@@ -387,11 +421,19 @@ class AbsorptionLineSystem:
 
         self.z_err=1
 
-        self.name=None
+        self.name=''
 
         self.possible_lines=[]
 
+        self.sorted_absorptions=[]
+
         self.mcmc_microlines=[]
+
+        self.masked_regions=[]
+
+    def add_masked_region(self,bounds):
+
+        self.masked_regions.append(bounds)
 
     def update_line_attributes(self):
 
@@ -440,11 +482,20 @@ class AbsorptionLineSystem:
 
         c_kms=299792.458
 
+        lambda_gal = self.suspected_line * (1 + ref_z)
+
+        self.velocity=c_kms * (self.wavelength - lambda_gal) / lambda_gal
+        self.MgII_velocity=c_kms * (self.MgII_wavelength - lambda_gal) / lambda_gal
+        self.extra_velocity=c_kms * (self.extra_wavelength - lambda_gal) / lambda_gal
+
+        self.high_res_extra_velocity= np.linspace(self.extra_velocity[0],self.extra_velocity[-1],len(self.extra_velocity)*10)
+
+        '''
         self.velocity= c_kms * (self.wavelength - ((1+ref_z)*self.suspected_line))/self.suspected_line
         self.MgII_velocity= c_kms * (self.MgII_wavelength - ((1+ref_z)*self.suspected_line))/self.suspected_line
         self.extra_velocity = c_kms * (self.extra_wavelength - ((1+ref_z)*self.suspected_line))/self.suspected_line
-
-        self.high_res_extra_velocity = np.linspace(self.extra_velocity[0],self.extra_velocity[-1],len(self.extra_velocity)*10)
+        '''
+        #self.high_res_extra_velocity = np.linspace(self.extra_velocity[0],self.extra_velocity[-1],len(self.extra_velocity)*10)
 
     def give_data(self,start_z,stop_z):
 
@@ -455,17 +506,14 @@ class AbsorptionLineSystem:
         wavelength=self.extra_wavelength[start_ind:stop_ind]
         flux=self.extra_flux[start_ind:stop_ind]
         errors=self.extra_errors[start_ind:stop_ind]
+        velocity=self.extra_velocity[start_ind:stop_ind]
 
-        return wavelength,flux,errors
+        return wavelength,flux,errors,velocity
 
     def to_dict(self):
-        
-        #reference_microline = (self.z + 1) * self.suspected_line
-        reference_microline = (.6582 + 1) * self.suspected_line
-        velocity = ((self.extra_wavelength - reference_microline) / reference_microline) * c_kms
 
         return {
-            'velocity': velocity.tolist(),
+            'velocity': self.extra_velocity.tolist(),
             'flux': self.extra_flux.tolist(),
             'errors': self.extra_errors.tolist(),
             'model_velocity':self.model_velocity.tolist(),
@@ -756,13 +804,22 @@ class AbsorptionLineSystem:
             flux=self.flux
             error=self.errors
 
-        peaks,_= find_peaks(1-flux,prominence=.1)
+        peaks,_= find_peaks(1-flux,prominence=.5*error)
 
         self.peaks=peaks
 
         for peak_ind in peaks:
             left = peak_ind
             right = peak_ind
+            '''
+            # Go left
+            while left > 0 and flux[left] <= 1:
+                left -= 1
+            
+            # Go right
+            while right < len(flux) - 1 and flux[right] <= 1:
+                right += 1
+            '''
             
             # Go left
             while left > 0 and flux[left] <= flux[left - 1]:
@@ -803,373 +860,4 @@ class AbsorptionLineSystem:
 
     
 #____________________________________________________________________________________________________
-
-
-class Custom_absorption_line:
-    def __init__(self,wavelength,flux,errors,element,transition):
-
-        self.wavelength = wavelength
-        self.flux = flux
-        self.errors = errors
-
-        self.start=self.wavelength[0]
-        self.stop=self.wavelength[-1]
-
-        if np.any(self.errors==0):
-            self.zero_error=True
-        else:
-            self.zero_error=False
-        
-        zero_flux_indices = [i for i, flux in enumerate(self.flux) if flux == 0.]  # Adjust the threshold as needed
-        self.number_of_zeros_flux=len(zero_flux_indices)
-
-        zero_error_indices = [i for i, error in enumerate(self.errors) if error == 0.]  # Adjust the threshold as needed
-        self.number_of_zeros_error=len(zero_error_indices)
-
-        if self.number_of_zeros_flux>=2:
-            self.peak = ((self.wavelength[0]+self.wavelength[-1])/2)
-        else:
-            self.peak = self.wavelength[np.argmin(self.flux)]
-
-        if self.number_of_zeros_flux>2:
-            self.is_saturated=True
-        else:
-            self.is_saturated=False
-
-        try:
-            self.center=(self.wavelength[0]+self.wavelength[1])/2
-        except:
-            self.center=self.wavelength[0]
-
-        self.suspected_element=element
-
-        self.mcmc_microlines=[]
-
-        #look up and find the correct transition and other aspects
-        row = AtomDB[(AtomDB['Transition'] == self.suspected_element) & (AtomDB['Floor'] == int(transition))]
-
-        if not row.empty:
-            self.suspected_line = row['Wavelength'].iloc[0]  # Extracts the first item
-            self.f = row['Strength'].iloc[0]
-            self.gamma = row['Tau'].iloc[0]
-        else:
-            print("No matching rows found.")
-
-        self.z=(self.peak-self.suspected_line)/self.suspected_line
-
-        self.name=f'{self.suspected_element} {self.suspected_line}'
-
-        self.plot()
-
-    def bonus(self,wav,flux,error):
-
-        self.extra_wavelength=wav
-        self.extra_flux=flux
-        self.extra_errors=error
-
-        self.MgII_wavelength=self.wavelength
-        self.MgII_flux=self.flux
-        self.MgII_errors=self.errors
-
-    def plot(self):
-        
-        plt.step(self.wavelength,self.flux,where="mid",color='black')
-        plt.step(self.wavelength,self.errors,where="mid",color='purple')
-
-        plt.title(f"Element:{self.suspected_element} \n Transition: {np.floor(self.suspected_line)}")
-
-        plt.xlim((self.wavelength[0]-5,self.wavelength[-1]+5))
-
-        # Save plot to a BytesIO buffer
-        buffer = io.BytesIO()
-        plt.savefig(buffer, format='png')
-        plt.close()
-
-        # Encode plot to Base64
-        buffer.seek(0)
-        self.plot_base64 = base64.b64encode(buffer.read()).decode('utf-8')
-
-        plt.clf()
-
-    def update_line_attributes(self):
-
-        row=AtomDB[AtomDB['Wavelength'] == self.suspected_line]
-
-        self.f=float(row['Strength'])
-        self.gamma=float(row['Tau'])
-
-
-    def find_N(self):
-
-        z=self.z
-        f=self.f
-        lambda_0=self.suspected_line
-
-        # Adjust wavelengths for redshift
-        z_adjusted_wavelength = (1 / (1 + z)) * self.wavelength
-
-        # Calculate the normalized flux
-        R = np.clip(self.flux, a_min=1e-10, a_max=None)
-        
-        # Calculate the uncertainty in R
-        sigma_R = R * np.sqrt((self.errors / R)**2)  # Assuming no continuum fitting errors
-
-        # Compute asymmetric uncertainties in optical depth
-        sigma_tau_plus = np.log(R + sigma_R) - np.log(R)
-        sigma_tau_minus = np.log(R) - np.log(np.clip(R - sigma_R, a_min=1e-10, a_max=None))
-
-        # Compute the optical depth
-        tau_lambda = -np.log(R)
-
-        # Calculate differences in the adjusted wavelengths
-        delta_lambda = np.diff(z_adjusted_wavelength / 10**8)
-
-        # Approximate the integral using a simple sum
-        integral_tau = np.sum(tau_lambda[:-1] * delta_lambda)
-
-        # Propagate the asymmetric uncertainties
-        sigma_integral_tau_plus = np.sqrt(np.sum((sigma_tau_plus[:-1] * delta_lambda) ** 2))
-        sigma_integral_tau_minus = np.sqrt(np.sum((sigma_tau_minus[:-1] * delta_lambda) ** 2))
-
-        # Constants in CGS
-        m_e = 9.109 * 10**(-28)  # electron mass in grams
-        c = 2.998 * 10**10       # speed of light in cm/s
-        e = 4.8 * 10**(-10)      # elementary charge
-
-        # Convert lambda_0 from Angstroms to centimeters
-        lambda_0_cm = lambda_0 / 10**8  
-
-        # Compute the column density
-        factor = (m_e * c**2) / (np.pi * e**2) / (f * lambda_0_cm**2)
-        self.N = factor * integral_tau
-
-        # Compute asymmetric errors in N
-        self.sigma_N_plus = factor * sigma_integral_tau_plus
-        self.sigma_N_minus = factor * sigma_integral_tau_minus
-
-        # Logarithmic errors
-        self.log_N = np.log10(self.N)
-        self.log_sigma_N_plus = 0.4343 * (self.sigma_N_plus / self.N)
-        self.log_sigma_N_minus = 0.4343 * (self.sigma_N_minus / self.N)
-
-        return self.N, self.sigma_N_plus, self.sigma_N_minus
-    
-    def give_data(self,start_z,stop_z):
-
-        start_ind=np.argmin(np.abs(self.extra_wavelength-(1+start_z)*self.suspected_line))
-        stop_ind=np.argmin(np.abs(self.extra_wavelength-(1+stop_z)*self.suspected_line))
-
-        wavelength=self.extra_wavelength[start_ind:stop_ind]
-        flux=self.extra_flux[start_ind:stop_ind]
-        errors=self.extra_errors[start_ind:stop_ind]
-
-        return wavelength,flux,errors
-    
-    def update_mcmc_microlines(self):
-        for microline in self.mcmc_microlines:
-            microline.suspected_line=self.suspected_line
-            microline.f=self.f
-            microline.gamma=self.gamma
-
-    def find_mcmc_microlines(self):
-
-        from copy import deepcopy
-
-        self.mcmc_microlines=[]
-
-        peaks,_= find_peaks(1-self.flux,prominence=.1)
-
-        self.peaks=peaks
-
-        for peak_ind in peaks:
-            left = peak_ind
-            right = peak_ind
-            
-            # Go left
-            while left > 0 and self.flux[left] <= self.flux[left - 1]:
-                left -= 1
-            
-            # Go right
-            while right < len(self.flux) - 1 and self.flux[right] <= self.flux[right + 1]:
-                right += 1
-            
-            # Convert to global indices
-            global_left = 1
-            global_right = 2
-            
-            # Extract data slices
-            wavelength_slice = self.wavelength[left:right+1]
-            flux_slice = self.flux[left:right+1]
-            error_slice = self.errors[left:right+1]
-            
-            # Create new microLine object (adjust according to your microLine class)
-            #new_microline = deepcopy(self.microLines[0])  # Copy structure
-            new_microline = MicroAbsorptionLine(wavelength_slice,flux_slice,error_slice,global_left,global_right)
-            '''new_microline.wavelength = wavelength_slice
-            new_microline.flux = flux_slice
-            new_microline.errors = error_slice
-            new_microline.global_start_ind = global_left
-            new_microline.global_end_ind = global_right
-            new_microline.peak_ind = peak_ind
-            new_microline.peak = self.wavelength[peak_ind]'''
-            new_microline.suspected_line=self.suspected_line
-            
-            # Append
-            self.mcmc_microlines.append(new_microline)
-    
-        return self.mcmc_microlines
-
-
-#____________________________________________________________________________________________________
-
-class AbsorptionLine:
-    def __init__(self, wavelength, flux, errors):
-
-        self.wavelength=wavelength
-        self.flux = flux
-        self.errors = errors
-
-        
-
-        self.start=self.wavelength[0]
-        self.stop=self.wavelength[-1]
-
-        self.values = list(zip(self.wavelength,self.flux))  # This will hold tuples of (wavelength, flux)
-
-        if np.any(self.errors==0):
-            self.zero_error=True
-        else:
-            self.zero_error=False
-        
-        zero_flux_indices = [i for i, flux in enumerate(self.flux) if flux == 0.]  # Adjust the threshold as needed
-        self.number_of_zeros_flux=len(zero_flux_indices)
-
-        zero_error_indices = [i for i, error in enumerate(self.errors) if error == 0.]  # Adjust the threshold as needed
-        self.number_of_zeros_error=len(zero_error_indices)
-
-        if self.number_of_zeros_flux>=2:
-            self.peak = ((self.wavelength[0]+self.wavelength[-1])/2)
-        else:
-            self.peak = self.wavelength[np.argmin(self.flux)]
-
-        if self.number_of_zeros_flux>2:
-            self.is_saturated=True
-        else:
-            self.is_saturated=False
-
-        #self.EW=self.calculate_equivalent_width()
-        self.EW=self.equivalent_width()
-
-        self.center=int((self.wavelength[0]+self.wavelength[1])/2)
-
-        self.suspected_line_loc=1
-        
-    
-    def actual_equivalent_width(self):
-
-        self.suspected_z=(self.peak-self.suspected_line_loc)/self.suspected_line_loc
-        
-        # Adjust wavelengths for redshift
-        z_adjusted_wavelength = (1 / (1 + self.suspected_z)) * self.wavelength
-        
-        # Differences in the adjusted wavelengths
-        delta_lambda = np.diff(z_adjusted_wavelength)
-        
-        # Calculate equivalent width
-        self.actual_ew = np.sum((1 - self.flux[:-1]) * delta_lambda)
-        
-        # Calculate the error in equivalent width
-        ew_errors = delta_lambda * self.errors[:-1]  # Assuming flux_errors array aligns with self.flux
-        self.actual_ew_error = np.sqrt(np.sum(ew_errors**2))
-        
-        return self.actual_ew, self.actual_ew_error
-    
-    def equivalent_width(self):
-
-        ew = simpson(1 - self.flux, x=self.wavelength) 
-
-        return ew
-    
-    
-    def find_N(self, z, f, lambda_0):
-        
-        # Adjust wavelengths for redshift
-        z_adjusted_wavelength = (1 / (1 + z)) * self.wavelength
-
-        # Calculate the optical depth, ensuring no zero or negative flux values
-        tau_lambda = -np.log(np.clip(self.flux, a_min=1e-10, a_max=None))
-        sigma_tau_lambda = self.errors / np.clip(self.flux, a_min=1e-10, a_max=None)
-
-        # Calculate differences in the adjusted wavelengths
-        delta_lambda = np.diff(z_adjusted_wavelength/10**8)
-
-        # Approximate the integral using a simple sum
-        integral_tau = np.sum(tau_lambda[:-1] * delta_lambda)
-        sigma_integral_tau = np.sqrt(np.sum((sigma_tau_lambda[:-1] * delta_lambda)**2))
-
-        # Constants in CGS
-        m_e = 9.109 * 10**(-28)  # electron mass in grams
-        c = 2.998 * 10**10     # speed of light in cm/s
-        e = 4.8 * 10**(-10)
-
-        # Assuming lambda_0 is provided in Angstroms (A), and needs to be in centimeters:
-        # 1 Angstrom = 10^-8 cm
-        lambda_0_cm = lambda_0 / 10**8  # converting from Angstroms to centimeters
-
-        # Calculate N
-        factor = (m_e * c**2) / (np.pi * e**2) / (f * lambda_0_cm**2)
-        self.N = factor * integral_tau
-        self.sigma_N = factor * sigma_integral_tau
-
-        self.log_N=np.log10(self.N)
-        self.log_sigma_N= self.sigma_N / self.N
-
-        return self.N,self.sigma_N 
-
-
-        
-    def plot(self,name):
-        
-        plt.plot(self.wavelength,self.flux)
-        plt.axvline(self.peak)
-        plt.title(f"Equivalent width:{self.EW}")
-        plt.savefig("test_plot/"+name+".png")
-        plt.clf()
-
-    def export(self, name):
-        # Split the name to separate the directory path and the file name
-        directory, filename = os.path.split(name)
-        
-        # Create the directory if it does not exist
-        if directory and not os.path.exists(directory):
-            os.makedirs(directory)
-        
-        # Create a DataFrame using a dictionary to ensure correct alignment of columns
-        df = pd.DataFrame({
-            'Flux': self.flux,
-            'Wavelength': self.wavelength,
-            'Error': self.errors
-        })
-        
-        # Save the DataFrame to a CSV file
-        df.to_csv(f"{name}.csv", index=False)
-
-    def save(self,name):
-
-        # Split the name to separate the directory path and the file name
-        directory, filename = os.path.split(name)
-        
-        # Create the directory if it does not exist
-        if directory and not os.path.exists(directory):
-            os.makedirs(directory)
-
-        save_object(self,name)
-
-    def update_line_attributes(self):
-
-        row=AtomDB[AtomDB['Wavelength'] == self.suspected_line_loc]
-
-        self.f=float(row['Strength'])
-        self.gamma=float(row['Tau'])
-
 

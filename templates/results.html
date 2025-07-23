@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-store" />
+    <title>Spectral Analysis Result</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        /* Collapsible Section Style */
+        .collapsible {
+            background-color: #007bff;
+            color: white;
+            cursor: pointer;
+            padding: 10px 15px;
+            width: 100%;
+            text-align: left;
+            border: none;
+            outline: none;
+            font-size: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .content {
+            padding: 10px 15px;
+            display: none;
+            overflow: hidden;
+            background-color: #f1f1f1;
+        }
+
+        /* Arrow icon for the collapsible */
+        .arrow {
+            font-size: 18px;
+            transition: transform 0.3s ease;
+        }
+
+        .rotate {
+            transform: rotate(90deg);
+        }
+    </style>
+
+    <style>
+        #plot {
+            width: 90%; /* Adjust width to stretch out the plot */
+            margin: auto; /* Center the plot horizontally */
+            height: 500px; /* Adjust height as needed */
+        }
+        button#submitRange {
+            display: block;
+            width: 200px;
+            margin: 20px auto; /* Center button and add space above */
+            padding: 10px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+<h1>Spectral Analysis Result</h1>
+
+<!-- Flux Plot Section -->
+<div id=""fluxPlot>
+    <h2>Flux Plot</h2>
+    <iframe src="{{ url_for('static', filename='Data/FluxPlot.html') }}" width="100%" height="600px" frameborder="0"></iframe>
+</div>
+
+<!-- Doublet Selection Section -->
+<button class="collapsible">
+    <span>Algorithm Found Absorbers</span>
+    <span class="arrow">▶</span>
+</button>
+<div class="content">
+
+<h2>Detected Absorbers</h2>
+{% if absorbers %}
+    {% for absorber in absorbers %}
+        <button class="collapsible">
+            <span>Absorber at z = {{ absorber.z|round(4) }}</span>
+            <span class="arrow">▶</span>
+        </button>
+        <div class="content">
+            <p><strong>Redshift (z):</strong> {{ absorber.z|round(4) }} ± {{ absorber.z_err|round(4) }}</p>
+
+            <div id="plot_{{ loop.index0 }}">
+                <img src="" alt="Velocity Plot" width="80%" id="img_plot_{{ loop.index0 }}">
+            </div>
+            
+
+            <!-- Element Selection Form -->
+            <form onsubmit="updatePlot(event, {{ loop.index0 }})">
+                <label for="element_{{ loop.index0 }}">Select Element:</label>
+                <select id="element_{{ loop.index0 }}" name="element">
+                    {% for element in absorber.list_found_elements() %}
+                        <option value="{{ element }}" {% if element == 'MgII' %} selected {% endif %}>
+                            {{ element }}
+                        </option>
+                    {% endfor %}
+                </select>
+                <button type="submit">Update Plot</button>
+            </form>
+
+            <!-- Multi-Element MCMC Form with Checkboxes -->
+            <form action="{{ url_for('multi_mcmc') }}" method="post">
+                <input type="hidden" name="absorber_index" value="{{ loop.index0 }}">
+
+                <label>Select Elements for Multi MCMC:</label>
+                <div style="display: flex; flex-wrap: wrap;">
+                    {% for element in absorber.list_found_elements() %}
+                        <label style="margin-right: 10px;">
+                            <input type="checkbox" name="multi_mcmc_elements" value="{{ element }}">
+                            {{ element }}
+                        </label>
+                    {% endfor %}
+                </div>
+
+                <button type="submit">Run Multi MCMC</button>
+            </form>
+
+
+
+        </div>
+    {% endfor %}
+{% else %}
+    <p>No absorbers found.</p>
+{% endif %}
+
+
+<!-- JavaScript for Plot Update -->
+<script>
+function updatePlot(event, absorberIndex) {
+    event.preventDefault();
+
+    const element = document.getElementById(`element_${absorberIndex}`).value;
+
+    fetch(`/update_plot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ absorber_index: absorberIndex, element: element })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.plot_base64) {
+            document.getElementById(`img_plot_${absorberIndex}`).src = `data:image/png;base64,${data.plot_base64}`;
+        } else {
+            alert("Failed to update plot.");
+        }
+    })
+    .catch(error => console.error('Error updating plot:', error));
+}
+</script>
+    
+
+</div>
+
+<!-- MGII smart find selection -->
+<button onclick='' class="collapsible">
+    <span>Smart Find</span>
+    <span class="arrow">▶</span>
+</button>
+
+<!-- Place this inside the specific collapsible section for the plot -->
+<div id="plot" class="content">
+    <h2> Please locate and select MgII 2796</h2>
+</div>
+<button id="submitRange">Submit Selected Range</button>
+
+<div style="text-align: center; margin-top: 20px;">
+    <h1>_________________________________________</h1>
+    <h3>Manual Input for Smart Find</h3>
+    <form action="{{ url_for('manual_smart_find') }}" method="post">
+        <label for="manual_z">Galaxy Redshift (z):</label>
+        <input type="number" step="any" name="manual_z" required>
+
+        <label for="manual_vmin">Start Reference Velocity (km/s):</label>
+        <input type="number" step="any" name="manual_vmin" required>
+
+        <label for="manual_vmax">End Reference Velocity (km/s):</label>
+        <input type="number" step="any" name="manual_vmax" required>
+
+        <button type="submit" style="margin-left: 10px;">Run Smart Find</button>
+    </form>
+</div>
+
+<div style="text-align: center; margin-top: 20px;">
+    <h1>_________________________________________</h1>
+    <h3> No Detection</h3>
+
+    <form action="{{ url_for('no_detection')}}" method="post">
+
+    <label for="manual_z">Galaxy Redshift (z):</label>
+    <input type="number" step="any" name="manual_z" required>
+
+    <button type="submit" style="margin-left: 10px;">Submit No Detection</button>
+
+    </form>
+
+
+</div>
+
+
+<script>
+    var selectedRange = {xmin: null, xmax: null};  // Holds the selected range
+
+    fetch('/data')
+    .then(response => response.json())
+    .then(data => {
+        console.log("Received data:", data);
+
+        var traces = [
+        {
+            x: data.wavelength,
+            y: data.flux,
+            mode: 'lines',
+            name: 'Flux',
+            type: 'line',
+            line: {
+            color : 'black',
+            //shape : 'hv',  
+            width : 1 }  
+            },
+        {
+            x: data.wavelength, 
+            y: data.error,
+            mode: 'lines',
+            name: 'Error',
+            type: 'line',
+            line: {
+            color: 'blue',
+            //shape: 'hv',  
+            width: 1 }  
+        }
+        ];
+
+        var layout = {
+        title: 'Select Range',
+        xaxis: {title: 'Wavelength'},
+        yaxis: {title: 'Flux'},
+        dragmode: 'select',  // default to select mode
+        updatemenus: [{
+            x: 0.0,
+            y: 1.2,
+            yanchor: 'top',
+            xanchor: 'left',
+            showactive: false,
+            buttons: [{
+                method: 'relayout',
+                args: ['dragmode', 'select'],
+                label: 'Select Mode'
+            }, {
+                method: 'relayout',
+                args: ['dragmode', 'pan'],
+                label: 'Pan Mode'
+            }]
+        }]
+    };
+
+    var config = {
+        responsive: true,
+        displaylogo: false,
+        modeBarButtonsToRemove: ['toggleSpikelines', 'hoverClosestCartesian', 'hoverCompareCartesian']
+    };
+
+    Plotly.newPlot('plot', traces, layout, config)
+    .then(function() {
+    var plotDiv = document.getElementById('plot');
+    plotDiv.on('plotly_selected', function(eventData) {
+        if (eventData) {
+            selectedRange.xmin = eventData.range.x[0];
+            selectedRange.xmax = eventData.range.x[1];
+            console.log(selectedRange.xmin, selectedRange.xmax);  // Logging the selected range
+            }
+        });
+    });
+
+    });
+
+    document.getElementById('submitRange').addEventListener('click', function() {
+        if (selectedRange.xmin && selectedRange.xmax) {
+            fetch('/save_selection', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(selectedRange)
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log(data.success)
+                if (data.success) {
+                    window.location.href = '/show_custom_results';  // Redirect on success
+                } else {
+                    alert('Failed to save selection. Please try again.');
+                }
+            })
+            .catch(error => console.error('Error:', error));
+        } else {
+            alert('Please make a selection on the plot.');
+        }
+    });
+</script>
+
+
+<!-- Manual Absorption Line Selector -->
+<button class="collapsible">
+    <span>Manual Absorption Line Selector</span>
+    <span class="arrow">▶</span>
+</button>
+
+<div class="content">
+    <div id="manualAbsorptionPlot" style="width: 90%; margin: auto; height: 500px;"></div>
+
+    <div style="text-align: center; margin-top: 10px;">
+        <label for="manual_element">Element:</label>
+        <input type="text" id="manual_element" required>
+
+        <label for="manual_transition">Transition:</label>
+        <input type="number" id="manual_transition" step="any" required>
+
+        <button id="addAbsorptionBtn">Add Absorption Line</button>
+    </div>
+
+    <h3>Manually Added Absorptions:</h3>
+    <ul id="manualAbsorptionsList">
+        <!-- Populated dynamically -->
+    </ul>
+
+    <!-- Multi-Element MCMC  -->
+    <form action="{{ url_for('multi_mcmc') }}" method="post">
+        <input type="hidden" name="absorber_index" value="{{ 101 }}">
+
+        <button type="submit">Run MCMC</button>
+    </form>
+</div>
+
+<script>
+    // Manual absorption selector logic
+    let manualSelectedRange = {xmin: null, xmax: null};
+    
+    // Fetch the same spectrum data as Smart Find
+    fetch('/data')
+    .then(response => response.json())
+    .then(data => {
+        const traces = [
+            {
+                x: data.wavelength,
+                y: data.flux,
+                mode: 'lines',
+                name: 'Flux',
+                type: 'line',
+                line: { color: 'black', width: 1 }
+            },
+            {
+                x: data.wavelength,
+                y: data.error,
+                mode: 'lines',
+                name: 'Error',
+                type: 'line',
+                line: { color: 'blue', width: 1 }
+            }
+        ];
+    
+        const layout = {
+            title: 'Select Absorption Range',
+            xaxis: { title: 'Wavelength' },
+            yaxis: { title: 'Flux' },
+            dragmode: 'select',
+            updatemenus: [{
+                buttons: [
+                    { method: 'relayout', args: ['dragmode', 'select'], label: 'Select' },
+                    { method: 'relayout', args: ['dragmode', 'pan'], label: 'Pan' }
+                ]
+            }]
+        };
+    
+        Plotly.newPlot('manualAbsorptionPlot', traces, layout, {responsive: true})
+        .then(() => {
+            const plotDiv = document.getElementById('manualAbsorptionPlot');
+            plotDiv.on('plotly_selected', function(eventData) {
+                if (eventData) {
+                    manualSelectedRange.xmin = eventData.range.x[0];
+                    manualSelectedRange.xmax = eventData.range.x[1];
+                    console.log('Selected Range:', manualSelectedRange);
+                }
+            });
+        });
+    });
+    
+    // Handle adding absorption line
+    document.getElementById('addAbsorptionBtn').addEventListener('click', function() {
+        const element = document.getElementById('manual_element').value.trim();
+        const transition = parseFloat(document.getElementById('manual_transition').value);
+    
+        if (!manualSelectedRange.xmin || !manualSelectedRange.xmax || !element || isNaN(transition)) {
+            alert('Please select a range and enter element and transition.');
+            return;
+        }
+    
+        const absorptionData = {
+            xmin: manualSelectedRange.xmin,
+            xmax: manualSelectedRange.xmax,
+            element: element,
+            transition: transition
+        };
+    
+        fetch('/add_manual_absorption', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(absorptionData)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                updateManualAbsorptionsList(data.absorptions);
+            } else {
+                alert('Failed to add absorption.');
+            }
+        })
+        .catch(error => console.error('Error:', error));
+    });
+    
+    // Update the manual absorptions list
+    function updateManualAbsorptionsList(absorptions) {
+    const list = document.getElementById('manualAbsorptionsList');
+    list.innerHTML = '';  // Clear existing items
+
+    for (const [key, absorption] of Object.entries(absorptions)) {
+        const li = document.createElement('li');
+        li.innerHTML = `
+            <strong>${key}</strong><br>
+            <img src="data:image/png;base64,${absorption.plot_base64}" width="40%" />
+        `;
+        list.appendChild(li);
+        }
+    }
+    </script>
+
+
+<!-- JavaScript for Collapsible Behavior -->
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const collapsibles = document.querySelectorAll(".collapsible");
+
+    collapsibles.forEach(button => {
+        button.addEventListener("click", function() {
+            const content = this.nextElementSibling;
+            const arrow = this.querySelector(".arrow");
+
+            if (content.style.display === "block") {
+                content.style.display = "none";
+                arrow.classList.remove("rotate");
+            } else {
+                content.style.display = "block";
+                arrow.classList.add("rotate");
+            }
+        });
+    });
+});
+</script>
+
+</body>
+</html>

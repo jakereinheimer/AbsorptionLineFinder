@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spectral Analysis</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 40px;
+        }
+
+        .container {
+            width: 50%;
+            margin: auto;
+            text-align: center;
+        }
+
+        h1 {
+            color: #333;
+        }
+
+        select {
+            padding: 10px;
+            font-size: 16px;
+            width: 100%;
+            margin-bottom: 20px;
+        }
+
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            background-color: #007BFF;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        img {
+            margin-top: 30px;
+            max-width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Spectra Analysis</h1>
+        <form action="/" method="GET">
+            <label for="catalog">Select Catalog:</label>
+            <select name="catalog" id="catalog" onchange="this.form.submit()">
+                {% for catalog in catalogs %}
+                <option value="{{ catalog }}" {% if selected_catalog == catalog %}selected{% endif %}>{{ catalog }}</option>
+                {% endfor %}
+            </select>
+        </form>
+        <form action="/analyze" method="POST">
+            <label for="spectrum">Select Spectrum:</label>
+            <select name="spectrum" id="spectrum">
+                {% for spectrum in spectra %}
+                <option value="{{ spectrum }}">{{ spectrum }}</option>
+                {% endfor %}
+            </select>
+            <br>
+            <button type="submit">Analyze</button>
+        </form>
+        {% if plot_url %}
+        <img src="{{ plot_url }}" alt="Spectral Plot">
+        {% endif %}
+    </div>
+
+    <div>
+        <form action="/upload_combined" method="POST" enctype="multipart/form-data">
+            <label>Upload Red Data:</label>
+            <input type="file" name="red_files" multiple><br><br>
+        
+            <label>Upload Blue Data:</label>
+            <input type="file" name="blue_files" multiple><br><br>
+        
+            <label>Red Arm Resolution (FWHM):</label>
+            <input type="number" name="red_res" step="0.1" value="7.5" required><br><br>
+        
+            <label>Blue Arm Resolution (FWHM):</label>
+            <input type="number" name="blue_res" step="0.1" value="7.5" required><br><br>
+
+            <label>Object Name</label>
+            <input type="text" name="object_name" required><br><br>
+        
+            <input type="checkbox" name="nmf" value="true"> NMF?<br><br>
+        
+            <button type="submit">Upload and Analyze Combined</button>
+        </form>
+    </div>
+    
+
+    <div>
+        <form action="/view_plot" method="POST" enctype="multipart/form-data">
+            <p>-----------------------</p>
+
+            <label>Select Object Directory</label>
+            <input type="file" name="object_dir" webkitdirectory directory multiple><br><br>
+        
+            <label>Galaxy Z</label>
+            <input type="number" name="GalZ" step="0.0001" value=".5" required><br><br>
+        
+            <button type="submit">Create LOS Plot</button>
+        </form>
+    </div>
+
+    <div>
+        <form action="/chain_upload" method="POST" enctype="multipart/form-data">
+            <p>-----------------------</p>
+            <label>Upload chain directory:</label>
+            <input type="file" name="object_dir" webkitdirectory directory multiple><br><br>
+
+            <label>Object Name</label>
+            <input type="text" name="object_name" required><br><br>
+        
+            <button type="submit">Analyze Chain</button>
+        </form>
+    </div>
+
+    <div>
+        <form action="/latex_creation" method="POST" enctype="multipart/form-data">
+            <p>-----------------------</p>
+            <h1>Create LaTeX table</h1>
+            <label>Upload created csvs for each line of sight:</label>
+
+            <h3>____</h3>
+
+            <!-- CSV 1 -->
+            <input type="file" name="csv1"><br><br>
+
+            <h3>____</h3>
+
+            <!-- CSV 2 -->
+            <input type="file" name="csv2"><br><br>
+
+            <h3>____</h3>
+
+            <!-- CSV 3 -->
+            <input type="file" name="csv3"><br><br>
+
+            <h3>____</h3>
+
+            <!-- CSV 4 -->
+            <input type="file" name="csv4"><br><br>
+
+            <h3>____</h3>
+
+            <button type="submit">Create LaTeX</button>
+        </form>
+    </div>
+    
+    
+
+    <form action="/trident" method="POST" class="container">
+        <p>-----------------------</p>
+        <label for="ID">Or enter TNG Subhalo ID:</label>
+        <input type="ID" name="ID" id="ID" required>
+        <br>
+        <button type="submit">Submit</button>
+    </form>
+</body>
+</html>
+

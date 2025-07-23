@@ -4,3 +4,12 @@ matplotlib
 scipy
 astropy
 pandas
+emcee
+plotly
+smplotlib
+corner
+sklearn
+requests
+yt
+trident
+lmfit

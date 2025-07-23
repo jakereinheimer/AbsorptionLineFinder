@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-store" />
+    <title>Pre-MCMC</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .content-container {
+            display: flex;
+            gap: 40px;
+            align-items: flex-start;
+        }
+
+        .image-container img {
+            max-width: 100%;
+            height: auto;
+        }
+
+        .table-container {
+            text-align: center;
+        }
+
+        table {
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+
+        td {
+            padding: 6px;
+            position: relative;
+        }
+
+        input[type="text"] {
+            width: 60px;
+            text-align: center;
+        }
+
+        .button-container {
+            display: flex;
+            gap: 2px;
+            justify-content: center;
+            margin-top: 2px;
+        }
+
+        .small-btn {
+            padding: 2px 5px;
+            font-size: 10px;
+        }
+
+        #plots-container > div {
+            margin-bottom: 10px;  /* Shrink vertical gap */
+        }
+
+    </style>
+    
+</head>
+
+<script>
+    function fixParam(i, j) {
+        const statusInput = document.getElementById(`status_${i}_${j}`);
+        const cell = document.getElementById(`cell_${i}_${j}`);
+        const isFixed = statusInput.value === 'fixed';
+    
+        statusInput.value = isFixed ? 'free' : 'fixed';
+        cell.style.backgroundColor = isFixed ? '' : '#ffdddd';  // light red for fixed
+    }
+    
+    function anchorParam(i, j) {
+    const select = document.getElementById(`anchor_select_${i}_${j}`);
+    if (select) {
+        select.style.display = (select.style.display === 'none') ? 'block' : 'none';
+        }
+    }
+
+    
+    function thermalParam(i, j) {
+        const select = document.getElementById(`thermal_select_${i}_${j}`);
+        if (select) {
+            select.style.display = (select.style.display === 'none') ? 'block' : 'none';
+        }
+    }
+
+    function non_thermalParam(i, j) {
+        const statusInput = document.getElementById(`status_${i}_${j}`);
+        const cell = document.getElementById(`cell_${i}_${j}`);
+        statusInput.value = 'non-thermal';
+        cell.style.backgroundColor = '#ffffcc';  // light yellow
+    }
+    
+    function setAnchor(i, j, selectElement) {
+        const value = selectElement.value;
+        const statusInput = document.getElementById(`status_${i}_${j}`);
+        const cell = document.getElementById(`cell_${i}_${j}`);
+
+        if (value) {
+            statusInput.value = `anchor_to:${value}`;
+            cell.style.backgroundColor = '#ddf';  // light blue
+        } else {
+            statusInput.value = 'free';
+            cell.style.backgroundColor = '';
+        }
+    }
+
+    function setThermalParam(i, j, selectElement) {
+        const value = selectElement.value;
+        const statusInput = document.getElementById(`status_${i}_${j}`);
+        const cell = document.getElementById(`cell_${i}_${j}`);
+
+        if (value) {
+            statusInput.value = `thermal:${value}`;
+            cell.style.backgroundColor = '#ccffcc';  // light green
+        } else {
+            statusInput.value = 'free';
+            cell.style.backgroundColor = '';
+        }
+    }
+</script>
+
+
+<body>
+
+    <div class="content-container">
+        <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+        <div id="plots-container"></div>
+
+        <script>
+        let selectedRegions = {};  // Dictionary to hold user-selected velocity regions
+
+        const lines = {{ velocity_data.keys() | list | tojson }}; 
+
+        // Flask must also send this JSON: {"line_name": {"velocity": [...], "flux": [...], "error": [...]}}
+        const velocityData = {{ velocity_data | tojson }};  // Dict from Flask backend
+
+        function createPlot(lineName, velocity, flux, error, model_velocity, model, model_chi) {
+            const traceFlux = {
+                x: velocity,
+                y: flux,
+                name: 'Flux',
+                type: 'scatter',
+                mode: 'lines',
+                line: { shape: 'hv' }  // 'hv' = horizontal-vertical (step plot)
+
+            };
+
+            const traceErr = {
+                x: velocity,
+                y: error,
+                mode: 'lines',
+                name: 'Error',
+                type: 'scatter',
+                line: { shape: 'hv' }  // 'hv' = horizontal-vertical (step plot)
+
+            };
+
+            const traceModel = {
+                x: model_velocity,
+                y: model,
+                mode: 'lines',
+                name: 'Model',
+                type: 'scatter',
+                line: { shape: 'hv' }  // 'hv' = horizontal-vertical (step plot)
+
+            };
+
+            const layout = {
+                dragmode: 'select',
+                xaxis: {range:[-200,200]
+                 },
+                yaxis: { title: 'Flux',
+                    range:[0,1.5]
+                 },
+                height: 300,
+                annotations: [
+                    {
+                        text: lineName,
+                        xref: 'paper', yref: 'paper',
+                        x: 0.98, y: 0.02,
+                        xanchor: 'right',
+                        yanchor: 'bottom',
+                        showarrow: false,
+                        font: {
+                            size: 14,
+                            color: 'gray'
+                            }
+                        },
+                        {
+                        text: model_chi,
+                        xref: 'paper', yref: 'paper',
+                        x: 0.98, y: 0.2,
+                        xanchor: 'right',
+                        yanchor: 'bottom',
+                        showarrow: false,
+                        font: {
+                            size: 14,
+                            color: 'gray'
+                            }
+                        }
+                    ]
+                };
+
+            const divId = `plot_${lineName.replace(/\s+/g, '_')}`;
+
+            const wrapper = document.createElement('div');
+            wrapper.style.border = '1px solid #ccc';
+            wrapper.style.padding = '5px';
+            wrapper.style.marginBottom = '1px';
+            wrapper.style.borderRadius = '8px';
+            wrapper.style.backgroundColor = '#fafafa';  // optional subtle background
+            wrapper.onmouseenter = () => wrapper.style.boxShadow = '0 0 5px #aaa';
+            wrapper.onmouseleave = () => wrapper.style.boxShadow = '';
+
+
+            const container = document.createElement('div');
+            container.id = divId;
+
+            wrapper.appendChild(container);
+            document.getElementById('plots-container').appendChild(wrapper);
+
+            Plotly.newPlot(divId, [traceFlux, traceErr, traceModel], layout);
+
+            document.getElementById(divId).on('plotly_selected', function(eventData) {
+            if (eventData && eventData.range && eventData.range.x) {
+                const xmin = eventData.range.x[0];
+                const xmax = eventData.range.x[1];
+                selectedRegions[lineName] = { xmin, xmax };
+            }
+        });
+        }
+
+        for (const [lineName, data] of Object.entries(velocityData)) {
+            createPlot(lineName, data.velocity, data.flux, data.errors,data.model_velocity,data.model,data.model_chi);
+        }
+
+        function attachMaskedRegions() {
+            const input = document.getElementById('masked_regions_input');
+            input.value = JSON.stringify(selectedRegions);
+        }
+
+        </script>
+
+        <form action="/manual_mcmc_lines" method="post" style="display: inline;">
+                <button type="submit"> Manual Mode!</button>
+        </form>
+
+
+        <div class="table-container">
+            <div class="image-container">
+                <img src="/static/Data/multi_mcmc/initial/initial_guesses.png" alt="Initial Guesses" width="100%">
+            </div>
+            <h1>Parameters</h1>
+            <form action="/mcmc_param_update" method="post" onsubmit="attachMaskedRegions()">
+                <table>
+                    <thead>
+                        <tr>
+                            <th></th>  <!-- top-left blank -->
+                            {% for col in column_names %}
+                                <th>{{ col }}</th>
+                            {% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in parameters %}
+                            {% set i = loop.index0 %}
+                            <tr>
+                                <th>Component {{ i }}</th>
+                                {% for value in row %}
+                                    {% set j = loop.index0 %}
+                                    <td id="cell_{{ i }}_{{ j }}">
+
+
+                                        <script>
+                                            const status = "{{ statuses[i][j] }}";
+                                            const cell = document.getElementById("cell_{{ i }}_{{ j }}");
+                                        
+                                            if (status === "fixed") {
+                                                cell.style.backgroundColor = "#ffdddd";
+                                            } else if (status.startsWith("anchor_to:")) {
+                                                cell.style.backgroundColor = "#ddf";
+                                                const comp = status.split(":")[1];
+                                                const anchorSelect = document.getElementById("anchor_select_{{ i }}_{{ j }}");
+                                                if (anchorSelect) {
+                                                    anchorSelect.value = comp;
+                                                    anchorSelect.style.display = "block";
+                                                }
+                                            } else if (status === "non-thermal") {
+                                                cell.style.backgroundColor = "#ffffcc";
+                                            } else if (status.startsWith("thermal:")) {
+                                                cell.style.backgroundColor = "#ccffcc";
+                                                const element = status.split(":")[1];
+                                                const thermalSelect = document.getElementById("thermal_select_{{ i }}_{{ j }}");
+                                                if (thermalSelect) {
+                                                    thermalSelect.value = element;
+                                                    thermalSelect.style.display = "block";
+                                                }
+                                            }
+                                        </script>
+
+
+                                        {% if j == 0 %}
+                                        <div style="display: flex; align-items: center;">
+                                            <input type="text" name="param_{{ i }}_{{ j }}" value="{{ value }}" style="width: 60px;">
+                                            <input type="hidden" name="status_{{ i }}_{{ j }}" id="status_{{ i }}_{{ j }}" value="{{ statuses[i][j] }}">
+
+                                            <div style="display: flex; flex-direction: column; margin-left: 4px;">
+                                                <input type="number" name="vmax_{{ i }}" value="{{ vmax_list[i] }}" step="any" style="width: 45px; font-size: 10px; margin-bottom: 1px;" placeholder="max">
+                                                <input type="number" name="vmin_{{ i }}" value="{{ vmin_list[i] }}" step="any" style="width: 45px; font-size: 10px;" placeholder="min">
+                                            </div>
+                                        </div>
+                                        {% else %}
+                                            <input type="text" name="param_{{ i }}_{{ j }}" value="{{ value }}">
+                                            <input type="hidden" name="status_{{ i }}_{{ j }}" id="status_{{ i }}_{{ j }}" value="{{ statuses[i][j] }}">
+                                        {% endif %}
+                                        
+                                        
+                                        <div class="button-container">
+                                            {% if j==0 %}
+                                            <button type="button" class="small-btn" onclick="fixParam({{ i }}, {{ j }})">Fix</button>
+                                            {% endif %}
+
+                                            {% if 'b' in column_names[j] %}
+                                                <button type="button" class="small-btn" onclick="thermalParam({{ i }}, {{ j }})">Thermal</button>
+                                                <button type="button" class="small-btn" onclick="non_thermalParam({{ i }}, {{ j }})">Non-Therm</button>
+                                                <button type="button" class="small-btn" onclick="fixParam({{ i }}, {{ j }})">Fix</button>
+                                                <button type="button" class="small-btn" onclick="anchorParam({{ i }}, {{ j }})">Anchor</button>
+
+                                                <select onchange="setThermalParam({{ i }}, {{ j }}, this)" style="display:none" id="thermal_select_{{ i }}_{{ j }}">
+                                                    <option value="">--Select Element--</option>
+                                                    {% for element in elements %}
+                                                        <option value="{{ element }}">{{ element }}</option>
+                                                    {% endfor %}
+                                                </select>
+                                            {% endif %}
+
+
+                                            {% if 'LogN' in column_names[j]%}
+                                            <button type="button" class="small-btn" onclick="fixParam({{ i }}, {{ j }})">Fix</button>
+                                            <button type="button" class="small-btn" onclick="anchorParam({{ i }}, {{ j }})">Anchor</button>
+                                            {% endif %}
+                                        </div>
+                        
+                                        <select onchange="setAnchor({{ i }}, {{ j }}, this)" style="display:none" id="anchor_select_{{ i }}_{{ j }}">
+                                            <option value="">--Select Element--</option>
+                                            {% for element in elements %}
+                                                <option value="{{ element }}">{{ element }}</option>
+                                            {% endfor %}
+                                        </select>
+
+                                    </td>
+                                {% endfor %}
+                            </tr>
+                        {% endfor %}
+                        </tbody>                        
+                </table>
+                <br>
+
+                <input type="hidden" id="masked_regions_input" name="masked_regions">
+
+                <input type="number" name="lmfit_iterations" step="1" value="0" required> lmfit iterations<br><br>
+
+                <input type="submit" value="Update">
+            </form>
+
+            <form action="/add_component" method="post" style="display: inline;">
+                <button type="submit">➕ Add Component</button>
+            </form>
+            
+            <form action="/delete_component" method="post" style="display: inline;">
+                <label for="component_index">Delete Component:</label>
+                <select name="component_index" id="component_index">
+                    {% for i in range(parameters|length) %}
+                        <option value="{{ i }}">Component {{ i }}</option>
+                    {% endfor %}
+                </select>
+                <button type="submit">❌ Delete</button>
+            </form>
+            
+
+            <form action="{{ url_for('actual_mcmc') }}" method="post">
+
+                <h2> </h2>
+                
+                <h2>Please update the parameters before running!</h2>
+        
+                <label for="mcmc_steps">MCMC Steps:</label>
+                <input type="number" id="mcmc_steps" name="mcmc_steps" value="1000" min="100" max="100000" required>
+        
+                <label for="mcmc_walkers">MCMC Walkers:</label>
+                <input type="number" id="mcmc_walkers" name="mcmc_walkers" value="250" min="10" max="1000" required>
+        
+                <button type="submit">Run MCMC</button>
+            </form>
+        </div>
+    </div>
+
+</body>
+
+</html>
