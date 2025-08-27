@@ -23,7 +23,7 @@ c_kms = 2.9979e5
 k = 1.38065e-16 # erg/K
 
 
-def plot_fits(params, line_dict, elements, mcmc_lines,file_name,chain_review=False):
+def plot_fits(params, line_dict, elements, mcmc_lines,file_name,chain_review=False,show_components=False):
 
     import smplotlib
 
@@ -33,7 +33,10 @@ def plot_fits(params, line_dict, elements, mcmc_lines,file_name,chain_review=Fal
     num_params_per_line = 1 + 2 * len(elements)
     param_list_2d = np.array(params).reshape(-1, num_params_per_line)
 
-    models=total_multi_model(params,line_dict,elements,mcmc_lines,convolve_data=True,high_resolution=True,extra=True)
+    if show_components:
+        models, component_models = total_multi_model(params, line_dict, elements, mcmc_lines, convolve_data=True, high_resolution=True, extra=True, individual_components=True)
+    else:
+        models=total_multi_model(params,line_dict,elements,mcmc_lines,convolve_data=True,high_resolution=True,extra=True)
     standard_models=total_multi_model(params,line_dict,elements,mcmc_lines,convolve_data=True)
 
     '''
@@ -115,7 +118,18 @@ def plot_fits(params, line_dict, elements, mcmc_lines,file_name,chain_review=Fal
 
         line.store_model(high_res_full_velocity, models.get(name),reduced_chi_squared)
 
-        ax.step(high_res_full_velocity, models.get(name), where='mid', label=f"Model", color="red",linewidth=1)
+        #ax.step(high_res_full_velocity, models.get(name), where='mid', label=f"Model", color="red",linewidth=1)
+
+        # Plot individual components
+        if show_components:
+            ax.step(high_res_full_velocity, models.get(name), where='mid', label=f"Model", color="red",linewidth=1)
+            colors = plt.cm.viridis(np.linspace(0, 1, len(component_models.get(name, []))))
+            for idx, component_flux in enumerate(component_models.get(name, [])):
+                ax.plot(high_res_full_velocity, component_flux, color=colors[idx], linestyle='--', alpha=.7, linewidth=1.2)
+
+        else:
+            ax.step(high_res_full_velocity, models.get(name), where='mid', label=f"Model", color="red",linewidth=1)
+
 
 
         for i,line_params in enumerate(param_list_2d):
@@ -165,12 +179,14 @@ def save_object(obj, filename):
         pickle.dump(obj, outp, pickle.HIGHEST_PROTOCOL)  # Pickle the object and write to file # Pickle the object and write to file
 
 
-def total_multi_model(params, line_dict, elements, mcmc_lines,convolve_data=True,high_resolution=False,chi2=False,extra=False):
+def total_multi_model(params, line_dict, elements, mcmc_lines, convolve_data=True, high_resolution=False, chi2=False, extra=False, individual_components=False):
 
     params_per_microline=(2*len(elements))+1
     param_list_2d = np.array(params).reshape(-1, params_per_microline)
 
-    models={}
+    models = {}
+    if individual_components:
+        component_models = {key: [] for key in line_dict.keys()}
 
     if chi2:
         chi_value=0
@@ -199,10 +215,15 @@ def total_multi_model(params, line_dict, elements, mcmc_lines,convolve_data=True
                     logN=line_params[(j*2)+1]
                     b=line_params[(j*2)+2]
 
-                    models[key]*=calctau(velocity,velocity_param,logN,b,line)
+                    tau = calctau(velocity, velocity_param, logN, b, line)
+                    models[key] *= tau
+                    if individual_components:
+                        component_models[key].append(tau)
 
         if convolve_data:
             models[key] = convolve_flux(velocity, models[key], line.fwhm)
+            if individual_components:
+                component_models[key] = [convolve_flux(velocity, comp, line.fwhm) for comp in component_models[key]]
 
         if chi2:
             obs_flux = line.MgII_flux
@@ -214,6 +235,8 @@ def total_multi_model(params, line_dict, elements, mcmc_lines,convolve_data=True
 
     if chi2:
         return models,chi_value
+    elif individual_components:
+        return models, component_models
     else:
         return models
 
@@ -324,6 +347,7 @@ def pre_mcmc(absorber,elements):
     #strong_line=line_dict.get('FeII 2600.1720322')
     #strong_line=line_dict.get('FeII 2374.4599813')
     #strong_line=line_dict.get('FeII 2586.6492304')
+    #strong_line=line_dict.get('FeII 2382.7639122')
 
     #____________________________________________________________________________
 
@@ -599,6 +623,8 @@ def mcmc(initial_guesses,statuses, nsteps=1000,nwalkers=250):
     plot_fits(map_params,line_dict,elements,mcmc_lines,'final/final_models')
 
     plot_fits(median_params,line_dict,elements,mcmc_lines,'final/median_fits')
+
+    plot_fits(median_params,line_dict,elements,mcmc_lines,'final/median_params_indv_comps',show_components=True)
 
     
     #_________________________________________________________________________________________ 

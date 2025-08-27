@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>LaTeX Output</title>
+    <style>
+        pre {
+            background-color: #f4f4f4;
+            padding: 1em;
+            overflow-x: auto;
+            border: 1px solid #ccc;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <h1>Generated LaTeX Table</h1>
+    <pre>{{ latex_output }}</pre>
+
+    {% if file_url %}
+        <p><a href="{{ file_url }}" download>Download LaTeX File</a></p>
+    {% endif %}
+</body>
+</html>

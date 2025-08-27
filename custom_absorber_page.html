@@ -16,16 +16,17 @@
     </div>
 
 
+
     <!-- Multi-Element MCMC Form with Checkboxes -->
     <form action="{{ url_for('multi_mcmc') }}" method="post">
         <input type="hidden" name="absorber_index" value="{{ 100 }}">
 
         <label>Select Elements for Multi MCMC:</label>
         <div style="display: flex; flex-wrap: wrap;">
-            {% for element in absorber.list_found_elements() %}
+            {% for line in absorber.list_lines() %}
                 <label style="margin-right: 10px;">
-                    <input type="checkbox" name="multi_mcmc_elements" value="{{ element }}">
-                    {{ element }}
+                    <input type="checkbox" name="multi_mcmc_elements" value="{{ line.name }}">
+                    {{ line.name }}
                 </label>
             {% endfor %}
         </div>

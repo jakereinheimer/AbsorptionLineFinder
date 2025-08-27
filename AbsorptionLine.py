@@ -536,31 +536,43 @@ class AbsorptionLineSystem:
             
 
     def actual_ew_func(self):
-
-        self.suspected_z=(self.peak-self.suspected_line)/self.suspected_line
+        self.suspected_z = (self.peak - self.suspected_line) / self.suspected_line
 
         try:
-            wave=self.MgII_wavelength
-            flux=self.MgII_flux
-            error=self.MgII_errors
+            wave = self.MgII_wavelength
+            flux = self.MgII_flux
+            error = self.MgII_errors
         except:
-            wave=self.wavelength
-            flux=self.flux
-            error=self.errors
-        
+            wave = self.wavelength
+            flux = self.flux
+            error = self.errors
+
         # Adjust wavelengths for redshift
         z_adjusted_wavelength = (1 / (1 + self.suspected_z)) * wave
-        
+
+        # Remove data points that fall within the masked regions
+        mask = np.ones_like(z_adjusted_wavelength, dtype=bool)  # Start with a mask that includes all points
+
+        # Loop through the masked regions and exclude them
+        for region in self.masked_regions:
+            start, end = region
+            mask &= ~( (z_adjusted_wavelength >= start) & (z_adjusted_wavelength <= end) )  # Exclude points within the region
+
+        # Apply the mask to the wavelengths, flux, and error
+        z_adjusted_wavelength = z_adjusted_wavelength[mask]
+        flux = flux[mask]
+        error = error[mask]
+
         # Differences in the adjusted wavelengths
         delta_lambda = np.diff(z_adjusted_wavelength)
-        
+
         # Calculate equivalent width
         self.actual_ew = np.sum((1 - flux[:-1]) * delta_lambda)
-        
+
         # Calculate the error in equivalent width
         ew_errors = delta_lambda * error[:-1]  # Assuming flux_errors array aligns with self.flux
         self.actual_ew_error = np.sqrt(np.sum(ew_errors**2))
-        
+
         return self.actual_ew, self.actual_ew_error
     
     def equivalent_width(self):
@@ -804,7 +816,7 @@ class AbsorptionLineSystem:
             flux=self.flux
             error=self.errors
 
-        peaks,_= find_peaks(1-flux,prominence=.5*error)
+        peaks,_= find_peaks(1-flux,prominence=1*error)
 
         self.peaks=peaks
 

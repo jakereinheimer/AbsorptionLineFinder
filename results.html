@@ -157,13 +157,48 @@ function updatePlot(event, absorberIndex) {
 
 <!-- MGII smart find selection -->
 <button onclick='' class="collapsible">
-    <span>Smart Find MgII</span>
+    <span>Smart Find</span>
     <span class="arrow">▶</span>
 </button>
 
 <!-- Place this inside the specific collapsible section for the plot -->
-<div id="plot" class="content"></div>
+<div id="plot" class="content">
+    <h2> Please locate and select MgII 2796</h2>
+</div>
 <button id="submitRange">Submit Selected Range</button>
+
+<div style="text-align: center; margin-top: 20px;">
+    <h1>_________________________________________</h1>
+    <h3>Manual Input for Smart Find</h3>
+    <form action="{{ url_for('manual_smart_find') }}" method="post">
+        <label for="manual_z">Galaxy Redshift (z):</label>
+        <input type="number" step="any" name="manual_z" required>
+
+        <label for="manual_vmin">Start Reference Velocity (km/s):</label>
+        <input type="number" step="any" name="manual_vmin" required>
+
+        <label for="manual_vmax">End Reference Velocity (km/s):</label>
+        <input type="number" step="any" name="manual_vmax" required>
+
+        <button type="submit" style="margin-left: 10px;">Run Smart Find</button>
+    </form>
+</div>
+
+<div style="text-align: center; margin-top: 20px;">
+    <h1>_________________________________________</h1>
+    <h3> No Detection</h3>
+
+    <form action="{{ url_for('no_detection')}}" method="post">
+
+    <label for="manual_z">Galaxy Redshift (z):</label>
+    <input type="number" step="any" name="manual_z" required>
+
+    <button type="submit" style="margin-left: 10px;">Submit No Detection</button>
+
+    </form>
+
+
+</div>
 
 
 <script>
@@ -267,44 +302,6 @@ function updatePlot(event, absorberIndex) {
     });
 </script>
 
-<!-- hand find Section -->
-<button class="collapsible">
-    <span>Hand find absorptions</span>
-    <span class="arrow">▶</span>
-</button>
-
-<div class="content">
-
-    <button onclick="startHandSelect()">Select Absorption Line</button>
-
-    {% if custom_absorptions %}
-        <h2>Manually Selected Absorptions</h2>
-        <ul>
-            {% for key, absorption in custom_absorptions.items() %}
-                <li>
-                    <strong>{{ key }}</strong><br>
-                    <img src="data:image/png;base64,{{ absorption.plot_base64 }}" width="30%">
-                </li>
-            {% endfor %}
-        </ul>
-    {% else %}
-        <p>No custom absorptions yet.</p>
-    {% endif %}
-
-    <!-- Multi-Element MCMC  -->
-    <form action="{{ url_for('custom_multi_mcmc') }}" method="post">
-
-        <label>Select Elements for Multi MCMC:</label>
-
-        <label for="custom_multi_mcmc_steps">MCMC Steps:</label>
-        <input type="number" id="custom_multi_mcmc_steps" name="custom_multi_mcmc_steps" value="1000" min="100" max="100000" required>
-
-        <label for="custom_multi_mcmc_walkers">MCMC Walkers:</label>
-        <input type="number" id="custom_multi_mcmc_walkers" name="custom_multi_mcmc_walkers" value="250" min="10" max="1000" required>
-
-        <button type="submit">Run MCMC</button>
-    </form>
-</div>
 
 <!-- Manual Absorption Line Selector -->
 <button class="collapsible">
@@ -439,21 +436,6 @@ function updatePlot(event, absorberIndex) {
         }
     }
     </script>
-    
-
-
-<script>
-function startHandSelect() {
-    fetch('/hand_select_absorption', {
-        method: 'POST'
-    })
-    .then(response => response.json())
-    .then(data => {
-        alert(data.message);
-    })
-    .catch(error => console.error('Error:', error));
-}
-</script>
 
 
 <!-- JavaScript for Collapsible Behavior -->

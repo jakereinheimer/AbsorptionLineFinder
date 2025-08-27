@@ -248,8 +248,15 @@
 
         </script>
 
+        <form action="/manual_mcmc_lines" method="post" style="display: inline;">
+                <button type="submit"> Manual Mode!</button>
+        </form>
+
 
         <div class="table-container">
+            <div class="image-container">
+                <img src="/static/Data/multi_mcmc/initial/initial_guesses.png" alt="Initial Guesses" width="100%">
+            </div>
             <h1>Parameters</h1>
             <form action="/mcmc_param_update" method="post" onsubmit="attachMaskedRegions()">
                 <table>
@@ -297,10 +304,23 @@
                                                 }
                                             }
                                         </script>
+
+
+                                        {% if j == 0 %}
+                                        <div style="display: flex; align-items: center;">
+                                            <input type="text" name="param_{{ i }}_{{ j }}" value="{{ value }}" style="width: 60px;">
+                                            <input type="hidden" name="status_{{ i }}_{{ j }}" id="status_{{ i }}_{{ j }}" value="{{ statuses[i][j] }}">
+
+                                            <div style="display: flex; flex-direction: column; margin-left: 4px;">
+                                                <input type="number" name="vmax_{{ i }}" value="{{ vmax_list[i] }}" step="any" style="width: 45px; font-size: 10px; margin-bottom: 1px;" placeholder="max">
+                                                <input type="number" name="vmin_{{ i }}" value="{{ vmin_list[i] }}" step="any" style="width: 45px; font-size: 10px;" placeholder="min">
+                                            </div>
+                                        </div>
+                                        {% else %}
+                                            <input type="text" name="param_{{ i }}_{{ j }}" value="{{ value }}">
+                                            <input type="hidden" name="status_{{ i }}_{{ j }}" id="status_{{ i }}_{{ j }}" value="{{ statuses[i][j] }}">
+                                        {% endif %}
                                         
-                                        
-                                        <input type="text" name="param_{{ i }}_{{ j }}" value="{{ value }}">
-                                        <input type="hidden" name="status_{{ i }}_{{ j }}" id="status_{{ i }}_{{ j }}" value="{{ statuses[i][j] }}">
                                         
                                         <div class="button-container">
                                             {% if j==0 %}
@@ -310,6 +330,8 @@
                                             {% if 'b' in column_names[j] %}
                                                 <button type="button" class="small-btn" onclick="thermalParam({{ i }}, {{ j }})">Thermal</button>
                                                 <button type="button" class="small-btn" onclick="non_thermalParam({{ i }}, {{ j }})">Non-Therm</button>
+                                                <button type="button" class="small-btn" onclick="fixParam({{ i }}, {{ j }})">Fix</button>
+                                                <button type="button" class="small-btn" onclick="anchorParam({{ i }}, {{ j }})">Anchor</button>
 
                                                 <select onchange="setThermalParam({{ i }}, {{ j }}, this)" style="display:none" id="thermal_select_{{ i }}_{{ j }}">
                                                     <option value="">--Select Element--</option>
@@ -327,9 +349,9 @@
                                         </div>
                         
                                         <select onchange="setAnchor({{ i }}, {{ j }}, this)" style="display:none" id="anchor_select_{{ i }}_{{ j }}">
-                                            <option value="">--Select--</option>
-                                            {% for m in range(parameters|length) %}
-                                                <option value="{{ m }}">Component {{ m }}</option>
+                                            <option value="">--Select Element--</option>
+                                            {% for element in elements %}
+                                                <option value="{{ element }}">{{ element }}</option>
                                             {% endfor %}
                                         </select>
 
@@ -342,6 +364,8 @@
                 <br>
 
                 <input type="hidden" id="masked_regions_input" name="masked_regions">
+
+                <input type="number" name="lmfit_iterations" step="1" value="0" required> lmfit iterations<br><br>
 
                 <input type="submit" value="Update">
             </form>

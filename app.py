@@ -260,6 +260,225 @@ def view_plots():
 
     return index()
 
+'''
+Chat gpt optimization
+'''
+'''
+from joblib import Parallel, delayed
+import corner
+
+def gelman_rubin(chains):
+    """
+    Computes the Gelman-Rubin R̂ statistic for a single parameter across walkers.
+    """
+    m = chains.shape[1]  # number of chains (walkers)
+    n = chains.shape[0]  # samples per chain
+
+    chain_means = np.mean(chains, axis=0)
+    chain_vars = np.var(chains, axis=0, ddof=1)
+    grand_mean = np.mean(chain_means)
+
+    # Between-chain variance
+    B = n * np.var(chain_means, ddof=1)
+
+    # Within-chain variance
+    W = np.mean(chain_vars)
+
+    # Estimated variance of the target distribution
+    var_hat = (1 - 1/n) * W + (1/n) * B
+
+    R_hat = np.sqrt(var_hat / W)
+    return R_hat
+
+def save_plots_and_tables(comp_idx, comp_chain, flattened, num_params_per_line, column_names, statuses, line_dict, mcmc_lines, summary_tables):
+    """
+    Saves trace plots, corner plots, and summary tables for each component.
+    """
+    # --- TRACE PLOTS ---
+    fig, axs = plt.subplots(num_params_per_line, figsize=(10, 2 * num_params_per_line), sharex=True)
+    for j in range(num_params_per_line):
+        axs[j].plot(flattened[:, j], alpha=0.5, lw=0.3)
+
+        param_chain = comp_chain[:, :, j]
+        r_hat = gelman_rubin(param_chain)
+        axs[j].text(0.02, 0.02, f"R = {r_hat:.3f}", transform=axs[j].transAxes)
+
+        axs[j].set_ylabel(f'{column_names[j]} ({statuses[comp_idx, j]})')
+
+    axs[-1].set_xlabel("Step")
+    fig.suptitle(f"Component {comp_idx + 1} Trace")
+    trace_path = os.path.join('static/chain_review/trace', f"trace_component_{comp_idx}.png")
+    fig.tight_layout()
+    fig.savefig(trace_path)
+    plt.close(fig)
+
+    # --- CORNER PLOT ---
+    comp_chain_flat = comp_chain.reshape(-1, comp_chain.shape[-1])
+    fig = corner.corner(
+        comp_chain_flat,
+        labels=[f'{column_names[j]} ({statuses[comp_idx, j]})' for j in range(num_params_per_line)],
+        quantiles=[0.16, 0.5, 0.84],
+        show_titles=True,
+        title_kwargs={"fontsize": 12}
+    )
+    corner_path = os.path.join('static/chain_review/triangle', f"triangle_component_{comp_idx}.png")
+    fig.savefig(corner_path)
+    plt.close(fig)
+
+    # --- Summary table ---
+    summary_table = []
+    for j in range(num_params_per_line):
+        samples = comp_chain_flat[:, j]
+
+        # Calculate EW for relevant line (avoiding redundant computations)
+        parameter = column_names[j]
+        if parameter != 'Velocity':
+            line = get_line_from_dict(parameter, line_dict)
+
+            if line:
+                eq_width, logN_from_EW = calculate_ew_and_logN(line, mcmc_lines, comp_idx)
+            else:
+                eq_width, logN_from_EW = None, None
+        else:
+            eq_width, logN_from_EW = None, None
+
+        median = np.percentile(samples, 50)
+        low = np.percentile(samples, 16)
+        high = np.percentile(samples, 84)
+        p95 = np.percentile(samples, 95)
+        p5 = np.percentile(samples, 5)
+
+        summary_table.append({
+            "param": column_names[j],
+            "median": f"{median:.3f} ± {high - median:.3f}/{median - low:.3f}",
+            "p95": f"{p95:.3f}",
+            "p5": f"{p5:.3f}",
+            "ew": eq_width,
+            "logN": logN_from_EW
+        })
+
+    summary_tables.append(summary_table)
+    return summary_tables
+
+# Helper function to extract line based on parameter
+def get_line_from_dict(parameter, line_dict):
+    if "MgII" in parameter:
+        return line_dict.get('MgII 2796.355099')
+    elif "FeII" in parameter:
+        return line_dict.get('FeII 2600.1720322', line_dict.get('FeII 2586.6492304', line_dict.get('FeII 2382.7639122')))
+    elif "CaII" in parameter:
+        return line_dict.get('CaII 3934.774716')
+    elif "MgI" in parameter:
+        return line_dict.get('MgI 2852.96342')
+    return None
+
+# Helper function to calculate EW and LogN
+def calculate_ew_and_logN(line, mcmc_lines, comp_idx):
+    vmin, vmax = mcmc_lines[comp_idx].vel_range
+    mask = (line.velocity >= vmin) & (line.velocity <= vmax)
+    if not np.any(mask):
+        return None, None
+
+    lam = line.wavelength[mask]
+    f = line.flux[mask]
+    f_err = line.errors[mask]  # Ensure this exists
+
+    dlam = np.gradient(lam)  # Compute Δλ
+    ew = np.sum((1 - f) * dlam)  # Compute equivalent width
+
+    ew_err = np.sqrt(np.sum((dlam * f_err) ** 2))  # Compute error on EW
+
+    wave_cm = line.suspected_line * 1e-8
+    f = line.f
+    m_e = 9.109 * 10 ** (-28)  # electron mass in grams
+    c = 2.998 * 10 ** 10  # speed of light in cm/s
+    e = 4.8 * 10 ** (-10)
+
+    K = (wave_cm ** 2 / c ** 2) * (np.pi * e ** 2 / m_e) * f * 1e8  # Conversion constant
+
+    N = ew / K
+    N_err = ew_err / K
+
+    logN = np.log10(N)
+    logN_err = N_err / (N * np.log(10))
+
+    return f"{ew:.3f} +/- {ew_err:.3f}", f"{logN:.3f} +/- {logN_err:.3f}"
+
+# Run everything in parallel for each component
+def run_parallel_processing(n_components, chain, flattened, num_params_per_line, column_names, statuses, line_dict, mcmc_lines):
+    summary_tables = Parallel(n_jobs=-1)(
+        delayed(save_plots_and_tables)(comp_idx, chain[:, :, comp_idx * num_params_per_line: (comp_idx + 1) * num_params_per_line], flattened, num_params_per_line, column_names, statuses, line_dict, mcmc_lines, [])
+        for comp_idx in range(n_components)
+    )
+    return summary_tables
+
+@app.route('/chain_upload', methods=['POST'])
+def chain_upload():
+    import os
+    from flask import request
+
+    try:
+        clear_directory('/Users/jakereinheimer/Desktop/Fakhri/VPFit/chain_upload/user_upload')
+        clear_directory('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/chain_review/trace')
+        clear_directory('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/chain_review/triangle')
+    except:
+        pass
+
+    uploaded_files = request.files.getlist("object_dir")
+    object_name = request.form.get('object_name', ' ')
+    save_object(object_name, 'object_name.pkl')
+
+    save_dir = os.path.join("chain_upload", "user_upload")
+    os.makedirs(save_dir, exist_ok=True)
+
+    # Upload and save the files
+    file_paths = []
+    for file in uploaded_files:
+        filename = file.filename[file.filename.find('/') + 1:]
+        if 'DS_Stor' in filename:
+            continue
+        filepath = os.path.join(save_dir, filename)
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        file.save(filepath)
+        file_paths.append(filepath)
+
+    # Loading the data
+    chain = np.load(os.path.join(save_dir, "chain.npy"))
+    mcmc_lines = load_object(os.path.join(save_dir, 'final/mcmc_lines.pkl'))
+    line_dict = load_object(os.path.join(save_dir, 'final/line_dict.pkl'))
+    params = load_object(os.path.join(save_dir, 'final/initial_guesses.pkl'))
+    elements = load_object(os.path.join(save_dir, 'initial/initial_element_list.pkl'))
+    num_params_per_line = 1 + 2 * len(elements)
+    params = np.array(params).reshape(-1, num_params_per_line)
+    statuses = np.array(load_object(os.path.join(save_dir, 'initial/initial_statuses.pkl')))
+    column_names = load_object(os.path.join(save_dir, 'initial/column_names.pkl'))
+
+    # Initialize marginalized_flags as an empty dictionary or with any default values
+    marginalized_flags = {i: False for i in range(chain.shape[-1] // num_params_per_line)}
+
+    # Flatten the chain for the plot
+    flattened = chain.reshape(-1, chain.shape[-1])  # shape: (10100*250, 10)
+    median_params = np.median(flattened, axis=0)
+    plot_fits(median_params, line_dict, elements, mcmc_lines, 'initial_fit_plot', chain_review=True, show_components=True)
+
+    n_components = chain.shape[-1] // num_params_per_line
+    summary_tables = run_parallel_processing(n_components, chain, flattened, num_params_per_line, column_names, statuses, line_dict, mcmc_lines)
+
+    save_object(summary_tables, 'static/chain_review/summary_tables.pkl')
+
+    return render_template(
+        "chain_review.html",
+        n_components=n_components,
+        summary_tables=summary_tables,
+        elements=elements,
+        marginalized_flags=marginalized_flags
+    )'''
+
+
+"""
+end chat gpt optimization
+"""
+
 @app.route('/chain_upload',methods=['POST'])
 def chain_upload():
     import os
@@ -290,6 +509,7 @@ def chain_upload():
         R_hat = np.sqrt(var_hat / W)
         return R_hat
 
+
     try:
         clear_directory('/Users/jakereinheimer/Desktop/Fakhri/VPFit/chain_upload/user_upload')
         clear_directory('/Users/jakereinheimer/Desktop/Fakhri/VPFit/static/chain_review/trace')
@@ -317,6 +537,12 @@ def chain_upload():
         file_paths.append(filepath)
 
     chain=np.load(os.path.join(save_dir,"chain.npy"))
+    print('chain shape')
+    print(chain.shape)
+
+    burn = int(chain.shape[0] * 0.2)
+    chain = chain[burn:, :, :]
+
     mcmc_lines=load_object(os.path.join(save_dir,'final/mcmc_lines.pkl'))
     line_dict=load_object(os.path.join(save_dir,'final/line_dict.pkl'))
     params = load_object(os.path.join(save_dir,'final/initial_guesses.pkl'))
@@ -329,12 +555,50 @@ def chain_upload():
     # chain: shape (steps, walkers, parameters)
     flattened = chain.reshape(-1, chain.shape[-1])  # shape: (10100*250, 10)
     median_params = np.median(flattened, axis=0)
-    plot_fits(median_params,line_dict,elements,mcmc_lines,'initial_fit_plot',chain_review=True)
+    #plot_fits(median_params,line_dict,elements,mcmc_lines,'initial_fit_plot',chain_review=True)
+
+    # --- Map Values ---
+    data_csv = pd.read_csv(os.path.join(save_dir,'absorber_data.csv'))
+
+    components = data_csv['Component'].unique()
+    components.sort()
+
+    map_list = []
+    for comp in components:
+        if comp == 'Total':
+            continue
+        row = []
+        comp_data = data_csv[data_csv['Component'] == comp]
+
+        # MAP velocity
+        vel = comp_data['MAP Velocity'].values[0]
+        row.append(vel)
+
+        for param in column_names:
+            if param == 'Velocity':
+                continue
+
+            if param.split(' ')[0] == 'b':
+                map_column_name = "MAP " + param.split(' ')[1] + ' ' + param.split(' ')[0] + ' (km/s)'
+            else:
+                map_column_name = "MAP " + param.split(' ')[1] + ' ' + param.split(' ')[0]
+
+            row.append(comp_data[map_column_name].values[0])
+
+        map_list.append(row)
+
+    map_params = np.array(map_list)
+
+    plot_fits(map_params.flatten(),line_dict,elements,mcmc_lines,'initial_fit_plot',chain_review=True)
+
+    # --- End Map Values ___
 
     all_summary_tables=[]
     n_components = chain.shape[-1] // num_params_per_line
 
     marginalized_flags = {}
+
+    detection_flags={}
 
     for comp_idx in range(n_components):
         start = comp_idx * num_params_per_line
@@ -379,28 +643,30 @@ def chain_upload():
         # --- Summary table ---
         summary_table = []
 
+        detection_flags[comp_idx]={}
+
         for j in range(num_params_per_line):
             samples = comp_chain_flat[:, j]
 
             #calc ew for relevant line
             parameter=column_names[j]
             if parameter!='Velocity':
-
-                print(parameter)
-                print('line dict')
-                print(line_dict)
                 
                 if "MgII" in parameter:
                     line=line_dict.get('MgII 2796.355099')
+                    element="MgII"
                 elif "FeII" in parameter:
+                    element="FeII"
                     line=line_dict.get('FeII 2600.1720322')
                     if line==None:
                         line=line_dict.get('FeII 2586.6492304')
                         if line == None:
                             line=line_dict.get('FeII 2382.7639122')
                 elif "CaII" in parameter:
+                    element="CaII"
                     line=line_dict.get('CaII 3934.774716')
                 elif "MgI" in parameter:
+                    element="MgI"
                     line=line_dict.get('MgI 2852.96342')
 
                 vmin,vmax = mcmc_lines[comp_idx].vel_range
@@ -422,6 +688,17 @@ def chain_upload():
                 # Compute error on EW
                 ew_err = np.sqrt(np.sum((dlam * f_err) ** 2))
 
+                detection_flag=detection_flags.get(comp_idx).get(element)
+                if detection_flag is None:
+
+                    if ew<2*ew_err:
+                        detection_flags.get(comp_idx)[element]="not_detected"
+
+                    elif ew>.4:
+                        detection_flags.get(comp_idx)[element]="saturated"
+
+                    else:
+                        detection_flags.get(comp_idx)[element]="detected"
 
                 #calc N from ew
                 wave_cm = line.suspected_line*1e-8
@@ -448,23 +725,49 @@ def chain_upload():
             else:
                 eq_width = None
                 logN_from_EW = None
+
+            if 'b' in column_names[j]:
+
+                tol=1.0
+
+                logn_samples=comp_chain[:, j-1]
+                b_samples=comp_chain[:, j]
+
+                mask = np.isfinite(logn_samples) & np.isfinite(b_samples) & (np.abs(b_samples - 10.0) <= tol)
+
+                try:
+                    logn_nondetection=float(np.percentile(logn_samples[mask], 5))
+                except:
+                    logn_nondetection=1.0
+            else:
+                logn_nondetection=1.0
             
 
             median = np.percentile(samples, 50)
             low = np.percentile(samples, 16)
             high = np.percentile(samples, 84)
-            #map_val = samples[np.argmax(np.histogram(samples, bins=100)[0])]
+            map_val = map_params[comp_idx,j]
             p95 = np.percentile(samples, 95)
             p5 = np.percentile(samples, 5)
 
+            if 'LogN' in column_names[j]:
+
+                if map_val<10:
+                    detection_flags.get(comp_idx)[element]="not_detected"
+
+                if map_val>13.8:
+                    detection_flags.get(comp_idx)[element]="saturated"
+
+
             summary_table.append({
                 "param": column_names[j],
-                "median": f"{median:.3f} ± {high - median:.3f}/{median - low:.3f}",
-                #"map": f"{map_val:.3f}",
+                "median": f"{median:.3f} ± ({high - median:.3f},{median - low:.3f})",
+                "map": f"{map_val:.3f}" + f" ± ({high:.3f},{low:.3f})",
                 "p95": f"{p95:.3f}",
                 "p5": f"{p5:.3f}",
                 "ew": eq_width,
-                "logN": logN_from_EW
+                "logN": logN_from_EW,
+                "logn_nondetection":f'{logn_nondetection:.3f}'
             })
         all_summary_tables.append(summary_table)
 
@@ -474,6 +777,7 @@ def chain_upload():
     "chain_review.html",
     n_components=n_components,
     summary_tables=all_summary_tables,
+    detection_flags=detection_flags,
     elements=elements,
     marginalized_flags=marginalized_flags
     )
@@ -513,7 +817,19 @@ def marginalize_component(component_index):
 
     comp_chain = chain[:, :, start:end].reshape(-1, num_params_per_line)
 
-    element_b_indices = {el: j for j, name in enumerate(column_names[start:end]) if name.startswith(f"b ") for el in elements if el in name}
+    print(column_names)
+    print(elements)
+
+    element_b_indices = {
+    el: j
+    for el in elements
+    for j, name in enumerate(column_names)
+    if name.startswith("b ") and el in name
+    }
+
+    print('selected element')
+    print(selected_element)
+    print(element_b_indices)
 
     if selected_element and selected_element in element_b_indices:
         ref_el = selected_element
@@ -522,7 +838,7 @@ def marginalize_component(component_index):
         ref_el, ref_idx = sorted(element_b_indices.items(), key=lambda x: element_masses.get(x[0], 999))[0]
 
     b_ref_vals = comp_chain[:, ref_idx]
-    b_ref_min = np.percentile(b_ref_vals,5)
+    b_ref_min = np.percentile(b_ref_vals,14)
 
     b_floors = {}
     for el, idx in element_b_indices.items():
@@ -541,10 +857,15 @@ def marginalize_component(component_index):
 
     # Save updated full chain with this component replaced
     full_chain = np.load(chain_path)
-    comp_chain_full = full_chain[:, :, start:end].reshape(-1, num_params_per_line)
-    comp_chain_full = comp_chain_full[mask]
     full_chain_flat = full_chain.reshape(-1, full_chain.shape[-1])
-    full_chain_flat[:, start:end] = comp_chain
+
+    # Replace only the masked rows in the component slice
+    filtered_comp_chain = np.copy(full_chain_flat[:, start:end])
+    for idx, floor in b_floors.items():
+        below = filtered_comp_chain[:, idx] < floor
+        filtered_comp_chain[below, idx] = np.nan  # or use floor, or 0 if preferred
+
+    full_chain_flat[:, start:end] = filtered_comp_chain
     updated_chain = full_chain_flat.reshape(full_chain.shape)
     np.save(chain_path, updated_chain)
 
@@ -563,9 +884,11 @@ def marginalize_component(component_index):
 
     # Regenerate trace plot
     fig, axs = plt.subplots(num_params_per_line, figsize=(10, 2 * num_params_per_line), sharex=True)
+    component_column_names = column_names
+    component_statuses = statuses[component_index, :num_params_per_line]
     for j in range(num_params_per_line):
         axs[j].plot(comp_chain[:, j], alpha=0.5, lw=0.3)
-        axs[j].set_ylabel(f'{column_names[start + j]} ({statuses[component_index, j]})')
+        axs[j].set_ylabel(f'{component_column_names[j]} ({component_statuses[j]})')
         if j in b_floors:
             axs[j].axhline(b_floors[j], color='red', linestyle='--')
     axs[-1].set_xlabel("Step")
@@ -578,7 +901,7 @@ def marginalize_component(component_index):
     # Regenerate corner plot
     fig = corner.corner(
         comp_chain,
-        labels=[f'{column_names[start + j]} ({statuses[component_index,j]})' for j in range(num_params_per_line)],
+        labels=[f'{column_names[j]} ({statuses[component_index,j]})' for j in range(num_params_per_line)],
         quantiles=[0.16, 0.5, 0.84],
         show_titles=True,
         title_kwargs={"fontsize": 12}
@@ -601,13 +924,29 @@ def marginalize_component(component_index):
         high = np.percentile(samples, 84)
         p95 = np.percentile(samples, 95)
         p5 = np.percentile(samples, 5)
+
+        if 'b' in column_names[j]:
+
+            tol=1.0
+
+            logn_samples=comp_chain[:, j-1]
+            b_samples=comp_chain[:, j]
+
+            mask = np.isfinite(logn_samples) & np.isfinite(b_samples) & (np.abs(b_samples - 10.0) <= tol)
+
+            logn_nondetection=float(np.percentile(logn_samples[mask], 95))
+        else:
+            logn_nondetection=None
+
+
         summary.append({
-            "param": column_names[start + j],
+            "param": column_names[j],
             "median": f"{median:.3f} ± {high - median:.3f}/{median - low:.3f}",
             "p95": f"{p95:.3f}",
             "p5": f"{p5:.3f}",
             "ew": summary_tables[component_index][j].get("ew"),
-            "logN": summary_tables[component_index][j].get("logN")
+            "logN": summary_tables[component_index][j].get("logN"),
+            "logn_nondetection":f'{logn_nondetection}'
         })
 
     summary_tables[component_index] = summary
@@ -643,7 +982,6 @@ def generate_csv():
     our_2796=line_dict.get('MgII 2796.355099')
     ref_z=load_object(os.path.join(save_dir,'initial/ref_z.pkl'))
 
-    # Convert to velocity relative to galaxy
     vmin = our_2796.velocity[0]
     vmax = our_2796.velocity[-1]
 
@@ -662,6 +1000,27 @@ def generate_csv():
 
         rows[0][f"{key.split(' ')[0]} {int(np.floor(float(key.split(' ')[1].strip())))} EW"]=f"{(1000*ew):.2f} +- {(1000*ew_error):.2f}"
 
+        #N calc from ew
+        wave_cm = value.suspected_line*1e-8
+        f=value.f
+        m_e = 9.109 * 10**(-28)  # electron mass in grams
+        c = 2.998 * 10**10       # speed of light in cm/s
+        e = 4.8 * 10**(-10)
+
+        # Conversion constant
+        K = (wave_cm**2 / c**2) * (np.pi * e**2 / m_e) * f * 1e8
+
+        # EW and its uncertainty
+        # Assume you already have ew and ew_err from previous step
+        N = ew / K
+        N_err = ew_error / K
+
+        # Logarithmic column density and uncertainty
+        logN = np.log10(N)
+        logN_err = N_err / (N * np.log(10))
+
+        rows[0][f"{key.split(' ')[0]} {int(np.floor(float(key.split(' ')[1].strip())))} Total LogN from EW"]=f"{(logN):.2f} +- {(logN_err):.2f}"
+
     for i in range(n_components):
         if i==0:
             row=rows[0]
@@ -672,24 +1031,33 @@ def generate_csv():
 
         # Velocity
         velocity = {row_['param']: row_ for row_ in summary_tables[i] if row_['param'] == 'Velocity'}
-        row['Velocity (km/s)'] = velocity.get('Velocity', {}).get('median', '---')
+        row['Velocity (km/s)'] = velocity.get('Velocity', {}).get('map', '---')
 
         for element in elements:
             flag = flags.get(f"flag_component_{i}_{element}", "detected")  # default to 'detected'
+            print('flag')
+            print(flag)
             params = {row_['param']: row_ for row_ in summary_tables[i] if element in row_['param']}
 
             logN = params.get(f"LogN {element}", {})
             b = params.get(f"b {element}", {})
 
+            # Add EW and logN from EW
+            ew_val = logN.get('ew', '---')
+            logN_from_EW = logN.get('logN', '---')
+
+            row[f"{element} EW"] = ew_val if ew_val is not None else '---'
+            row[f"{element} LogN from EW"] = logN_from_EW if logN_from_EW is not None else '---'
+
             if flag == "saturated":
                 row[f"{element} LogN"] = f">{logN.get('p5', '---')}"
                 row[f"{element} b (km/s)"] = f"<{b.get('p95', '---')}"
             elif flag == "not_detected":
-                row[f"{element} LogN"] = f"<{logN.get('p95', '---')}"
-                row[f"{element} b (km/s)"] = "---"
+                row[f"{element} LogN"] = f"<{b.get('logn_nondetection', '---')}"
+                row[f"{element} b (km/s)"] = "10 +- 1"
             else:  # detected
-                row[f"{element} LogN"] = logN.get('median', '---')
-                row[f"{element} b (km/s)"] = b.get('median', '---')
+                row[f"{element} LogN"] = logN.get('map', '---')
+                row[f"{element} b (km/s)"] = b.get('map', '---')
         if i>0:
             rows.append(row)
 
@@ -732,7 +1100,24 @@ def generate_csv():
     except FileNotFoundError:
         marginalized_flags = {}
 
-    return render_template("chain_review.html", n_components=n_components,summary_tables=summary_tables,elements=elements,marginalized_flags=marginalized_flags )
+    # --- Save classification flags to CSV ---
+    classification_rows = []
+
+    for i in range(n_components):
+        row = {"Component": i + 1}
+        for element in elements:
+            flag = flags.get(f"flag_component_{i}_{element}", "detected")
+            row[element] = flag
+        classification_rows.append(row)
+
+    # Create dataframe and write to CSV
+    classification_df = pd.DataFrame(classification_rows)
+    os.makedirs("static/csv_outputs", exist_ok=True)
+    class_csv_path = os.path.join("static/csv_outputs", f"classification_flags_{str(load_object('object_name.pkl'))}.csv")
+    classification_df.to_csv(class_csv_path, index=False)
+
+    return index()
+    #return render_template("chain_review.html", n_components=n_components,summary_tables=summary_tables,elements=elements,marginalized_flags=marginalized_flags )
 
 '''
 @app.route('/generate_latex', methods=['POST'])
@@ -850,7 +1235,7 @@ def latex_creation():
     for df in dataframes:
         # Extract LOS name from 'Object Name' column
         full_name = str(df.get('Object Name', ['Unknown']).iloc[0])
-        los_name = full_name.split()[-1]  # e.g., 'A1'
+        los_name = full_name.split()[-1] 
         df['LOS']=los_name
         los_names.append(los_name)
 
@@ -932,38 +1317,69 @@ def latex_creation():
     # Apply to all cells
     df_for_latex = combined_df.copy().applymap(wrap_math_if_needed)'''
 
+    #split the table into two now
+    cols = df_for_latex.columns
+
+    # ---- EW table ----
+    ew_df_cols = [c for c in ['Object Name', 'Galaxy Z', 'Integration Window'] if c in cols]
+    ew_df_cols += [c for c in cols if ('EW' in c and any(ch.isdigit() for ch in c)) or (c == 'Total LogN from EW')]
+    # de-duplicate while preserving order
+    ew_df_cols = list(dict.fromkeys(ew_df_cols))
+
+    ew_df = df_for_latex[ew_df_cols]
+
+    # ---- Component table ----
+    comp_df_cols = [c for c in ['Object Name','Galaxy Z','Integration Window','Component','Velocity (km/s)'] if c in cols]
+    comp_df_cols += [c for c in cols if ('LogN' in c and 'from EW' not in c) or ('b (km/s)' in c)]
+    comp_df_cols = list(dict.fromkeys(comp_df_cols))
+
+    comp_df = df_for_latex[comp_df_cols]
+
+    ew_table_body=ew_df.to_latex(index=False, na_rep='', escape=False)
+    comp_table_body=comp_df.to_latex(index=False, na_rep='', escape=False)
+
+    tables=[ew_table_body,comp_table_body]
+
     # Then call .to_latex()
-    table_body = df_for_latex.to_latex(index=False, na_rep='', escape=False)
+    #table_body = df_for_latex.to_latex(index=False, na_rep='', escape=False)
 
     #table_body=combined_df.to_latex(index=False,na_rep='',escape=False)
 
-    match = re.search(r'\\begin{tabular}{([^}]*)}', table_body)
-    if match:
-        original_format = match.group(1)
-        num_columns = len(original_format)
-        new_format = '|'.join(['c'] * num_columns)
-        new_tabular_line = rf'\\begin{{tabular}}{{|{new_format}|}}'
-        table_body = re.sub(r'\\begin{tabular}{[^}]*}', new_tabular_line, table_body)
+    for i,table_body in enumerate(tables):
+        match = re.search(r'\\begin{tabular}{([^}]*)}', table_body)
+        if match:
+            original_format = match.group(1)
+            num_columns = len(original_format)
+            new_format = '|'.join(['c'] * num_columns)
+            new_tabular_line = rf'\\begin{{tabular}}{{|{new_format}|}}'
+            table_body = re.sub(r'\\begin{tabular}{[^}]*}', new_tabular_line, table_body)
 
-    table_body = table_body.replace('+-', r'\pm').replace('+/-', r'\pm').replace('±',r'\pm')
+        table_body = table_body.replace('+-', r'\pm').replace('+/-', r'\pm').replace('±',r'\pm')
 
-    table_body = table_body.replace(r'\toprule', r'')
-    table_body = table_body.replace(r'\midrule', r'')
-    table_body = table_body.replace(r'\bottomrule', r'')
+        table_body = table_body.replace(r'\toprule', r'')
+        table_body = table_body.replace(r'\midrule', r'')
+        table_body = table_body.replace(r'\bottomrule', r'')
 
-    table_body = re.sub(r'\\\\\n', r'\\\\\n\\hline\n', table_body)
+        table_body = re.sub(r'\\\\\n', r'\\\\\n\\hline\n', table_body)
 
-    full_latex=r"""\begin{table*}
-        \centering
-        \resizebox{\textwidth}{!}{%
-        \renewcommand{\arraystretch}{1.3}
-        \tiny
-        """ + table_body + r"""
-        }
-        \caption{Summary of absorber properties for each line of sight. Equivalent widths are in milli-Angstroms. Limits are $3\sigma$.}
-        \label{tab:absorbers}
-        \end{table*}
-        """
+        full_latex=r"""\begin{table*}
+            \centering
+            \resizebox{\textwidth}{!}{%
+            \renewcommand{\arraystretch}{1.3}
+            \tiny
+            """ + table_body + r"""
+            }
+            \caption{placeholder}
+            \label{tab:absorbers}
+            \end{table*}
+            """
+        
+        if i==0:
+            with open(f"equivalent_width_latex.txt", "a") as f:
+                f.write(full_latex)
+        if i==1:
+            with open(f"component_analysis_latex.txt", "a") as f:
+                f.write(full_latex)
 
     return render_template("latex_result.html", latex_output=full_latex)
 
@@ -1162,7 +1578,7 @@ def no_detection():
 
     #rows[0]['Projected Distance']=np.round(abs(cosmo.comoving_distance(ref_z).to('kpc')-cosmo.comoving_distance(our_2796.suspected_z).to('kpc')),2)
     #rows[0]['Absorber Redshift']=f"{our_2796.suspected_z:.5f}"
-
+    keys_to_remove = []
     for key,value in line_dict.items():
 
         ew,ew_error=value.actual_ew_func()
@@ -1170,6 +1586,13 @@ def no_detection():
         rows[0][f"{key.split(' ')[0]} {int(np.floor(float(key.split(' ')[1].strip())))} EW"]=f"{int(1000*ew)} +/- {int(1000*ew_error)} (<{int(3*1000*ew_error)})"
 
         #rows[0][f"{key} EW"]=f"{(1000*ew):.2f} +- {(1000*ew_error):.2f}"
+        try:
+            value.make_velocity(gal_z)
+        except:
+            keys_to_remove.append(key)
+
+    for key in keys_to_remove:
+        del line_dict[key]
 
     # Create a dataframe
     df = pd.DataFrame(rows)
@@ -1186,11 +1609,11 @@ def no_detection():
     #copy absorption csv file over too
     shutil.copy('absorber_data.csv',object_folder)
 
+    #copy the line dict over to it too
+    os.makedirs(os.path.join(object_folder,'final'),exist_ok=True)
+    save_object(line_dict,os.path.join(object_folder,'final/line_dict.pkl'))
+
     return index()
-
-
-
-
 
 @app.route('/multi_mcmc', methods=['POST'])
 def multi_mcmc(no_pre=False, fixed=False):

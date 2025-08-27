@@ -788,8 +788,8 @@ class VPFit:
     def no_detection(self,z):
 
         lines_to_find={
-            'MgII 2796.354':2796.354,
-            'MgII 2803.531':2803.531,
+            'MgII 2796.354':2796.355099,
+            'MgII 2803.531':2803.5322972,
             'FeII 2600.1720322':2600.1720322,
             'FeII 2586.6492304':2586.6492304,
             'FeII 2382.7639122':2382.7639122,
@@ -807,6 +807,8 @@ class VPFit:
 
         for key, rest_wave in lines_to_find.items():
 
+            print(key)
+
             obs_wave = rest_wave * (1 + z)
             delta_lambda = obs_wave * (v_kms / c)
 
@@ -814,7 +816,7 @@ class VPFit:
             lam_min = obs_wave - delta_lambda
             lam_max = obs_wave + delta_lambda
 
-            if lam_min<self.wavelength[0]:
+            if lam_max<self.wavelength[0]:
                 continue
 
             # Find indices within that wavelength range
@@ -1764,8 +1766,9 @@ class VPFit:
             self.optimizedMethod(N=2)
 
             try:
-                self.churchill_style_absorbers(arm='blue')
-                self.churchill_style_absorbers(arm='red')
+                #self.churchill_style_absorbers(arm='blue')
+                #self.churchill_style_absorbers(arm='red')
+                pass
             except:
                 pass
 
