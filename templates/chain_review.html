@@ -78,46 +78,33 @@
 <body>
     <div class="container">
         <div class="left-pane">
-
             <h2>Tips for finding saturation:</h2>
-            <h3>    - Look at the minimum normalized flux: if it’s near zero, the line is likely saturated.</h3>
-            <h3>    - Look for a banana shape in the MCMC plot between LogN and b.</h3>
-            <h3>    - Calculate or estimate equivalent width and see how it scales with LogN.</h3>
+            <h3>- Look at the minimum normalized flux: if it’s near zero, the line is likely saturated.</h3>
+            <h3>- Look for a banana shape in the MCMC plot between LogN and b.</h3>
+            <h3>- Calculate or estimate equivalent width and see how it scales with LogN.</h3>
 
-            {% for i in range(n_components) %}
-                <button type="button" class="accordion">Component {{ i+1 }}</button>
-                <div class="panel">
-                    <p><strong>Trace Plot:</strong></p>
-                    <img src="{{ url_for('static', filename='chain_review/trace/trace_component_' + i|string + '.png') }}" width="100%">
+            <!-- BEGIN: Form for CSV -->
+            <form action="/generate_csv" method="POST">
+                {% for i in range(n_components) %}
+                    <button type="button" class="accordion">Component {{ i+1 }}</button>
+                    <div class="panel">
 
-                    <p><strong>Triangle Plot:</strong></p>
-                    <img src="{{ url_for('static', filename='chain_review/triangle/triangle_component_' + i|string + '.png') }}" width="100%">
+                        <!-- TRACE & TRIANGLE plots -->
+                        <p><strong>Trace Plot:</strong></p>
+                        <img src="{{ url_for('static', filename='chain_review/trace/trace_component_' + i|string + '.png') }}" width="100%">
 
-                    {% set marg_info = marginalized_flags.get(i) %}
-                    {% if marg_info %}
-                        <p><strong>Marginalized:</strong> Using {{ marg_info.reference_element }} — floor = {{ "%.2f"|format(marg_info.b_floor) }} km/s</p>
-                    {% else %}
-                        <form action="/marginalize_component/{{ i }}" method="POST" style="margin-top: 10px;">
-                            <label for="reference_element_{{ i }}"><strong>Reference element:</strong></label>
-                            <select name="reference_element" id="reference_element_{{ i }}">
-                                {% for el in elements %}
-                                    <option value="{{ el }}">{{ el }}</option>
-                                {% endfor %}
-                            </select>
-                            <button type="submit">Marginalize</button>
-                        </form>
-                    {% endif %}
+                        <p><strong>Triangle Plot:</strong></p>
+                        <img src="{{ url_for('static', filename='chain_review/triangle/triangle_component_' + i|string + '.png') }}" width="100%">
 
 
-
-                    <!-- The rest (parameter summary + flags) -->
-                    <h4>Parameter Summary</h4>
+                        <!-- PARAMETER TABLE -->
+                        <h4>Parameter Summary</h4>
                         <table border="1" cellspacing="0" cellpadding="5">
                             <thead>
                                 <tr>
                                     <th>Parameter</th>
                                     <th>Median ± 1σ</th>
-                                    <!--<th>MAP</th>-->
+                                    <th>MAP ± HPD</th>
                                     <th>95%</th>
                                     <th>5%</th>
                                     <th>EW</th>
@@ -129,7 +116,7 @@
                                 <tr>
                                     <td>{{ row.param }}</td>
                                     <td>{{ row.median }}</td>
-                                    <!--<td>{{ row.map }}</td>-->
+                                    <td>{{ row.map }}</td>
                                     <td>{{ row.p95 }}</td>
                                     <td>{{ row.p5 }}</td>
                                     <td>{{ row.ew }}</td>
@@ -139,31 +126,70 @@
                             </tbody>
                         </table>
 
+                        <!-- FLAGS (inside main form) -->
+                        <p><strong>Flag this component:</strong></p>
 
-                    <p><strong>Flag this component:</strong></p>
-                    {% for element in elements %}
-                        <p><strong>Flag {{element}}:</strong></p>
+                        {# Get this component's flags; handle int vs str keys #}
+                        {% set comp_flags = detection_flags.get(i) or detection_flags.get(i|string) or {} %}
+
+                        {% for element in elements %}
+                        {% set current = comp_flags.get(element, 'detected') %}
+                        <p><strong>Flag {{ element }}:</strong></p>
                         <select name="flag_component_{{ i }}_{{ element }}">
-                            <option value="detected">Detected</option>
-                            <option value="saturated">Saturated</option>
-                            <option value="not_detected">Not Detected</option>
+                            <option value="detected" {{ 'selected' if current == 'detected' else '' }}>Detected</option>
+                            <option value="saturated" {{ 'selected' if current == 'saturated' else '' }}>Saturated</option>
+                            <option value="not_detected" {{ 'selected' if current == 'not_detected' else '' }}>Not Detected</option>
                         </select>
-                    {% endfor %}
-                </div>
-            {% endfor %}
+                        {% endfor %}
 
-            <!-- Now the Generate CSV button has its own standalone form -->
-            <form action="/generate_csv" method="POST">
+                    </div>
+                {% endfor %}
+
+                <!-- FINAL CSV BUTTON -->
                 <button type="submit">Generate Final CSV</button>
             </form>
 
+            <!-- BEGIN: Separate marginalization forms (not nested)
+            {% for i in range(n_components) %}
+                <form action="/marginalize_component/{{ i }}" method="POST" style="margin-top: 10px;">
+                <label>Reference element:</label>
+                <select name="reference_element">
+                    {% for el in elements %}<option value="{{ el }}">{{ el }}</option>{% endfor %}
+                </select>
+                <label>Target element:</label>
+                <select name="target_element">
+                    {% for el in elements %}<option value="{{ el }}">{{ el }}</option>{% endfor %}
+                </select>
+                <button type="submit">Marginalize Component {{ i+1 }}</button>
+                </form>
+            {% endfor %}
+            -->
+
+            <form action="/marginalize_component" method="POST" style="margin-top: 10px;">
+                <label>Component:</label>
+                <select name="component">
+                    {% for n in range(n_components) %}<option value="{{ n+1 }}">{{ n+1 }}</option>{% endfor %}
+                </select>
+                <label>Reference element:</label>
+                <select name="reference_element">
+                    {% for el in elements %}<option value="{{ el }}">{{ el }}</option>{% endfor %}
+                </select>
+                <label>Target element:</label>
+                <select name="target_element">
+                    {% for el in elements %}<option value="{{ el }}">{{ el }}</option>{% endfor %}
+                </select>
+                <label>Percentile:</label>
+                <input type="number" name="percentile" step="1" value="16" required><br><br>
+                
+                <button type="submit">Marginalize Component</button>
+            </form>
 
             <form action='/chain_to_fixed_mcmc' method="POST">
                 <button type="submit">Add New Component</button>
             </form>
 
             <form action='/chain_to_mcmc' method="POST">
-                <button type="submit" >Continue Chain</button>
+                <button type="submit">Continue Chain</button>
             </form>
         </div>
 

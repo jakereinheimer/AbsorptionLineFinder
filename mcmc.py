@@ -12,7 +12,7 @@ import pandas as pd
 
 # Import your specific functions
 from essential_functions import read_atomDB
-from mcmc_functions import find_N, calctau, convolve_flux,mcmc_line, summarize_params,velocity_to_redshift,redshift_to_velocity,parse_statuses,rebuild_full_params,read_atomic_mass,rebuild_full_samples,plot_trace,build_full_chain
+from mcmc_functions import find_N, calctau, convolve_flux,mcmc_line, summarize_params,velocity_to_redshift,redshift_to_velocity,parse_statuses,rebuild_full_params,read_atomic_mass,rebuild_full_samples,plot_trace_block,build_full_chain
 from AbsorptionLine import MicroAbsorptionLine
 
 e = 4.8032e-10 # electron charge in stat-coulumb
@@ -288,8 +288,21 @@ def log_multi_prior(params,elements,mcmc_lines):
             logN=line_params[(j*2)+1]
             b=line_params[(j*2)+2]
 
-            if not (vel_range[0] < velocity < vel_range[1] and .1 < b < 50 and 0 < logN < 25):
+            if not (vel_range[0] < velocity < vel_range[1] and .1 < b < 20 and 8 < logN < 20):
                 return -np.inf
+            
+        
+        #new b prior
+        try: #have to do try here because sometimes FeII won't be present
+            b_MgII=line_params[2]
+            b_FeII=line_params[4]
+
+            if b_MgII<b_FeII:
+                return -np.inf
+            
+        except:
+            pass
+
             
     return 0.0
 
@@ -482,7 +495,8 @@ def mcmc(initial_guesses,statuses, nsteps=1000,nwalkers=250):
     #pos generation
     ndim = len(initial_free_values)
     params_per_line = 1 + 2 * len(elements)
-    percent_off=.05
+    b_percent_off=.05
+    n_percent_off=.001
 
     #chat version
     pos = []
@@ -492,12 +506,20 @@ def mcmc(initial_guesses,statuses, nsteps=1000,nwalkers=250):
             base_val = initial_guesses[i][j]
             
             if j == 0:  # velocity column
-                vel_range = (mcmc_lines[i].vel_range[0],
-                            mcmc_lines[i].vel_range[1])
-                sampled_val = np.random.uniform(*vel_range)
-            else:  # logN or b
-                std = percent_off * abs(base_val) if base_val != 0 else percent_off
+                #vel_range = (mcmc_lines[i].vel_range[0],
+                #            mcmc_lines[i].vel_range[1])
+                #sampled_val = np.random.uniform(*vel_range)
+                std = n_percent_off * abs(base_val) if base_val != 0 else b_percent_off
                 sampled_val = np.random.normal(base_val, std)
+            else:  # logN or b
+                if j%2==0:
+                    #b
+                    std = b_percent_off * abs(base_val) if base_val != 0 else b_percent_off
+                    sampled_val = np.random.normal(base_val, std)
+                else:
+                    #logn
+                    std = n_percent_off * abs(base_val) if base_val != 0 else n_percent_off
+                    sampled_val = np.random.normal(base_val, std)
 
             walker_pos.append(sampled_val)
 
@@ -682,14 +704,22 @@ def mcmc(initial_guesses,statuses, nsteps=1000,nwalkers=250):
 
     #_________________________________________________________________________________________
     #trace plot
-    try:
-        plot_trace(
-            np.transpose(full_chain, (1, 0, 2)),
-            labels=labels,
-            save_path="static/Data/multi_mcmc/final/mcmc_trace.png"
+
+    for i, mcmc_line_obj in enumerate(mcmc_lines):
+        params_per_microline = (2 * len(elements)) + 1
+        start = i * params_per_microline
+        end   = (i + 1) * params_per_microline
+
+        # full_chain is (steps, walkers, params)
+        param_chain_block = full_chain[:, :, start:end]
+        labels_block = labels[start:end]
+
+        plot_trace_block(
+            param_chain_block,
+            labels=labels_block,
+            save_path=f"static/Data/multi_mcmc/final/mcmc_trace_{i}.png"
         )
-    except:
-        pass
+
 
     #__________________________________________________________________________________________
     #make table like his plot
@@ -809,7 +839,8 @@ def mcmc(initial_guesses,statuses, nsteps=1000,nwalkers=250):
 
     #__________________________________________________________________________________________
     #save the chain
-    chain=sampler.get_chain()
+    #chain=sampler.get_chain()
+    chain=full_chain
     np.save('static/Data/multi_mcmc/chain.npy', chain)  # Saves the chain
 
     save_object(line_dict,'static/Data/multi_mcmc/final/line_dict.pkl')

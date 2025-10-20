@@ -5,12 +5,12 @@ from astropy.io import fits
 from matplotlib.widgets import Slider
 import os
 from scipy.signal import find_peaks
-from scipy.integrate import simpson
+from scipy.integrate import simpson as simps
 import pickle
 import io
 import base64
 import smplotlib as sm
-from scipy.integrate import simps
+#from scipy.integrate import simps
 import plotly.graph_objs as go
 import plotly
 import json
@@ -71,6 +71,10 @@ class Absorber:
         the_list=list(self.lines.values())
 
         return the_list
+    
+    def return_full_dict(self):
+
+        return self.lines
     
     def return_specific_lines(self,inp):
         
@@ -484,9 +488,17 @@ class AbsorptionLineSystem:
 
         lambda_gal = self.suspected_line * (1 + ref_z)
 
+        print('debug')
+        print(self.name)
+        print(self.MgII_wavelength)
+
         self.velocity=c_kms * (self.wavelength - lambda_gal) / lambda_gal
         self.MgII_velocity=c_kms * (self.MgII_wavelength - lambda_gal) / lambda_gal
-        self.extra_velocity=c_kms * (self.extra_wavelength - lambda_gal) / lambda_gal
+        try:
+            self.extra_velocity=c_kms * (self.extra_wavelength - lambda_gal) / lambda_gal
+            self.high_res_extra_velocity= np.linspace(self.extra_velocity[0],self.extra_velocity[-1],len(self.extra_velocity)*10)
+        except:
+            self.extra_velocity=self.MgII_velocity
 
         self.high_res_extra_velocity= np.linspace(self.extra_velocity[0],self.extra_velocity[-1],len(self.extra_velocity)*10)
 
@@ -577,7 +589,7 @@ class AbsorptionLineSystem:
     
     def equivalent_width(self):
 
-        self.ew = simpson(1 - self.flux, x=self.wavelength) 
+        self.ew = simps(1 - self.flux, x=self.wavelength) 
 
         return self.ew
     
@@ -816,7 +828,7 @@ class AbsorptionLineSystem:
             flux=self.flux
             error=self.errors
 
-        peaks,_= find_peaks(1-flux,prominence=1*error)
+        peaks,_= find_peaks(1-flux,prominence=1.5*error)
 
         self.peaks=peaks
 

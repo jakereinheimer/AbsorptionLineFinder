@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Pre-MCMC</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <style>
+    #plots-container { max-width: 1100px; margin: 12px auto; }
+  </style>
+</head>
+<body>
+
+  <!-- 1) The container you append charts into -->
+  <div id="plots-container"></div>
+
+  <!-- 2) Make your data available to JS -->
+  <script>
+    const velocityData = {{ velocity_data | tojson }};  // <-- ensure your Flask route passes this
+  </script>
+
+  <script>
+  function createPlot(lineName, velocity, flux, error, model_velocity, model) {
+    const divId = `plot_${lineName.replace(/\s+/g, '_')}`;
+    const container = document.createElement('div');
+    container.id = divId;
+    container.style.width = '100%';
+    container.style.height = '320px';
+    document.getElementById('plots-container').appendChild(container);
+
+    const chart = echarts.init(container, null, {renderer:'canvas'});
+
+    chart.setOption({
+      animation: false,
+      tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+      xAxis: { type: 'value', name: 'Velocity (km/s)' },
+      yAxis: { type: 'value', name: 'Flux', min: 0, max: 1.5 },
+      grid: { left: 60, right: 20, top: 20, bottom: 40 },
+      series: [
+        { name:'Flux',  type:'line', step:'middle', showSymbol:false,
+          data: velocity.map((x,i)=>[x, flux[i]]) },
+        { name:'Error', type:'line', step:'middle', showSymbol:false, opacity:0.5,
+          data: velocity.map((x,i)=>[x, error[i]]) },
+        { name:'Model', type:'line', step:'middle', showSymbol:false, lineStyle:{width:2},
+          data: (model_velocity ?? velocity).map((x,i)=>[x, (model ?? Array(velocity.length).fill(1))[i]]) }
+      ],
+      brush: {
+        toolbox: ['rect','clear'],
+        xAxisIndex: 'all',
+        brushMode: 'single'
+      }
+    });
+
+    chart.on('brushEnd', function (params) {
+      const areas = params.areas || [];
+      if (!areas.length) return;
+      const a = areas[0];
+      const grid = chart.getModel().getComponent('grid', 0).coordinateSystem;
+      const px = a.range?.[0]; if (!px) return;
+      const x0 = grid.convertFromPixel({x:px[0], y:0})[0];
+      const x1 = grid.convertFromPixel({x:px[1], y:0})[0];
+      const vmin = Math.min(x0,x1), vmax = Math.max(x0,x1);
+      sendMaskToFlask(lineName, vmin, vmax);
+    });
+
+    window.addEventListener('resize', () => chart.resize());
+  }
+
+  async function sendMaskToFlask(lineName, vmin, vmax) {
+    try {
+      const resp = await fetch("{{ url_for('mask_region') }}", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ line_name: lineName, region: [vmin, vmax] })
+      });
+      const data = await resp.json();
+      if (!data.ok) console.warn('Mask save failed:', data);
+    } catch (e) { console.error('Mask POST error', e); }
+  }
+
+  // 3) Build plots after DOM is ready
+  document.addEventListener('DOMContentLoaded', () => {
+    for (const [lineName, data] of Object.entries(velocityData)) {
+      createPlot(
+        lineName,
+        data.velocity,
+        data.flux,
+        data.errors,
+        data.model_velocity ?? data.velocity,
+        data.model ?? Array(data.velocity.length).fill(1)
+      );
+    }
+  });
+  </script>
+</body>
+</html>

@@ -21,6 +21,7 @@ def load_object(filename):
     with open(filename, 'rb') as inp:  # Open the file in binary read mode
         return pickle.load(inp)  # Return the unpickled object
 
+
 class mcmc_line:
     def __init__(self,example_line,elements,saturation_direction=None):
 
@@ -127,31 +128,43 @@ def build_full_chain(
 
 
 
-def plot_trace(full_chain, labels, save_path, threshold=1e-8):
+def plot_trace_block(chain_swp, labels, save_path, threshold=1e-8):
+    """
+    Plot traces for a block of params.
+    Expects chain_swp with shape (n_steps, n_walkers, n_params).
+    """
+    import numpy as np
+    import matplotlib.pyplot as plt
 
-    n_walkers, n_steps, n_params = full_chain.shape
+    ch = np.asarray(chain_swp)
+    if ch.ndim != 3:
+        raise ValueError(f"Expected 3-D chain (steps,walkers,params), got {ch.shape}")
 
-    fig, axes = plt.subplots(n_params, figsize=(10, 3 * n_params), sharex=True)
+    n_steps, n_walkers, n_params = ch.shape
+
+    fig, axes = plt.subplots(n_params, 1, figsize=(10, 2.5 * n_params), sharex=True)
     if n_params == 1:
         axes = [axes]
 
-    for i in range(n_params):
-        ax = axes[i]
-        for w in range(n_walkers):
-            ax.plot(full_chain[w, :, i], alpha=0.3, lw=0.7,c='black')
-        
-        std = np.std(full_chain[:, :, i])
+    for p in range(n_params):
+        ax = axes[p]
+        # ch[:, :, p] is (steps, walkers); plotting 2-D draws one line per column (i.e., per walker).
+        ax.plot(ch[:, :, p], alpha=0.3, lw=0.6, color='black')
+
+        std = np.std(ch[:, :, p])
         if std < threshold:
-            mean_val = np.mean(full_chain[:, :, i])
-            ax.axhline(mean_val, color='red', linestyle='--', alpha=0.6)
+            mean_val = np.mean(ch[:, :, p])
+            ax.axhline(mean_val, color='red', linestyle='--', alpha=0.7)
 
-        ax.set_ylabel(labels[i])
-        ax.yaxis.set_label_coords(-0.1, 0.5)
+        ax.set_ylabel(labels[p])
 
-    axes[-1].set_xlabel("Step number")
-    plt.tight_layout(h_pad=0)
-    plt.savefig(save_path)
-    plt.clf()
+    axes[-1].set_xlabel("Step")
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+
+
 
 
 
